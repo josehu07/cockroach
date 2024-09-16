@@ -334,7 +334,7 @@ func (w *tpcc) tpccCustomerInitialRowBatch(
 	// 10% of the customer rows have bad credit.
 	// See section 4.3, under the CUSTOMER table population section.
 	credit := goodCredit
-	if l.rng.Intn(9) == 0 {
+	if l.rng.Intn(2) == 0 { // CW: old spec BC% too small
 		// Poor 10% :(
 		credit = badCredit
 	}

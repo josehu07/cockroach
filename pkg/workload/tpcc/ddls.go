@@ -19,66 +19,71 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
+// CW: allowed text scaling
+
+var (
 	// WAREHOUSE table.
-	tpccWarehouseSchema = `(
+	tpccWarehouseSchema = fmt.Sprintf(`(
 		w_id        integer       not null primary key,
-		w_name      varchar(10)   not null,
-		w_street_1  varchar(20)   not null,
-		w_street_2  varchar(20)   not null,
-		w_city      varchar(20)   not null,
-		w_state     char(2)       not null,
-		w_zip       char(9)       not null,
+		w_name      varchar(%d)   not null,
+		w_street_1  varchar(%d)   not null,
+		w_street_2  varchar(%d)   not null,
+		w_city      varchar(%d)   not null,
+		w_state     char(%d)       not null,
+		w_zip       char(%d)       not null,
 		w_tax       decimal(4,4)  not null,
-		w_ytd       decimal(12,2) not null`
+		w_ytd       decimal(12,2) not null`,
+		10*textScale+1, 20*textScale+1, 20*textScale+1, 20*textScale+1, 2*textScale+1, 9*textScale+1)
 	tpccWarehouseColumnFamiliesSuffix = `
 		family      f1 (w_id, w_name, w_street_1, w_street_2, w_city, w_state, w_zip, w_ytd),
 		family      f2 (w_tax)`
 
 	// DISTRICT table.
-	tpccDistrictSchemaBase = `(
+	tpccDistrictSchemaBase = fmt.Sprintf(`(
 		d_id         integer       not null,
 		d_w_id       integer       not null,
-		d_name       varchar(10)   not null,
-		d_street_1   varchar(20)   not null,
-		d_street_2   varchar(20)   not null,
-		d_city       varchar(20)   not null,
-		d_state      char(2)       not null,
-		d_zip        char(9)       not null,
+		d_name       varchar(%d)   not null,
+		d_street_1   varchar(%d)   not null,
+		d_street_2   varchar(%d)   not null,
+		d_city       varchar(%d)   not null,
+		d_state      char(%d)       not null,
+		d_zip        char(%d)       not null,
 		d_tax        decimal(4,4)  not null,
 		d_ytd        decimal(12,2) not null,
 		d_next_o_id  integer       not null,
-		primary key  (d_w_id, d_id)`
+		primary key  (d_w_id, d_id)`,
+		10*textScale+1, 20*textScale+1, 20*textScale+1, 20*textScale+1, 2*textScale+1, 9*textScale+1)
 	tpccDistrictColumnFamiliesSuffix = `
 		family       static    (d_w_id, d_id, d_name, d_street_1, d_street_2, d_city, d_state, d_zip),
 		family       dynamic_1 (d_ytd),
 		family       dynamic_2 (d_next_o_id, d_tax)`
 
 	// CUSTOMER table.
-	tpccCustomerSchemaBase = `(
+	tpccCustomerSchemaBase = fmt.Sprintf(`(
 		c_id           integer       not null,
 		c_d_id         integer       not null,
 		c_w_id         integer       not null,
-		c_first        varchar(16)   not null,
-		c_middle       char(2)       not null,
-		c_last         varchar(16)   not null,
-		c_street_1     varchar(20)   not null,
-		c_street_2     varchar(20)   not null,
-		c_city         varchar(20)   not null,
-		c_state        char(2)       not null,
-		c_zip          char(9)       not null,
-		c_phone        char(16)      not null,
+		c_first        varchar(%d)   not null,
+		c_middle       char(%d)       not null,
+		c_last         varchar(%d)   not null,
+		c_street_1     varchar(%d)   not null,
+		c_street_2     varchar(%d)   not null,
+		c_city         varchar(%d)   not null,
+		c_state        char(%d)       not null,
+		c_zip          char(%d)       not null,
+		c_phone        char(%d)      not null,
 		c_since        timestamp     not null,
-		c_credit       char(2)       not null,
+		c_credit       char(%d)       not null,
 		c_credit_lim   decimal(12,2) not null,
 		c_discount     decimal(4,4)  not null,
 		c_balance      decimal(12,2) not null,
 		c_ytd_payment  decimal(12,2) not null,
 		c_payment_cnt  integer       not null,
 		c_delivery_cnt integer       not null,
-		c_data         varchar(500)  not null,
+		c_data         varchar(%d)  not null,
 		primary key        (c_w_id, c_d_id, c_id),
-		index customer_idx (c_w_id, c_d_id, c_last, c_first)`
+		index customer_idx (c_w_id, c_d_id, c_last, c_first)`,
+		16*textScale+1, 2*textScale+1, 16*textScale+1, 20*textScale+1, 20*textScale+1, 20*textScale+1, 2*textScale+1, 9*textScale+1, 16*textScale+1, 2*textScale+1, 500*textScale+1)
 	tpccCustomerColumnFamiliesSuffix = `
 		family static      (
 			c_id, c_d_id, c_w_id, c_first, c_middle, c_last, c_street_1, c_street_2,
@@ -87,7 +92,7 @@ const (
 		family dynamic (c_balance, c_ytd_payment, c_payment_cnt, c_data, c_delivery_cnt)`
 
 	// HISTORY table.
-	tpccHistorySchemaBase = `(
+	tpccHistorySchemaBase = fmt.Sprintf(`(
 		rowid    uuid    not null default gen_random_uuid(),
 		h_c_id   integer not null,
 		h_c_d_id integer not null,
@@ -96,8 +101,9 @@ const (
 		h_w_id   integer not null,
 		h_date   timestamp,
 		h_amount decimal(6,2),
-		h_data   varchar(24),
-		primary key (h_w_id, rowid)`
+		h_data   varchar(%d),
+		primary key (h_w_id, rowid)`,
+		24*textScale+1)
 	deprecatedTpccHistorySchemaFkSuffix = `
 		index history_customer_fk_idx (h_c_w_id, h_c_d_id, h_c_id),
 		index history_district_fk_idx (h_w_id, h_d_id)`
@@ -125,40 +131,41 @@ const (
 	`
 
 	// ITEM table.
-	tpccItemSchema = `(
+	tpccItemSchema = fmt.Sprintf(`(
 		i_id     integer      not null,
 		i_im_id  integer,
-		i_name   varchar(24),
+		i_name   varchar(%d),
 		i_price  decimal(5,2),
-		i_data   varchar(50),
-		primary key (i_id)
-	`
+		i_data   varchar(%d),
+		primary key (i_id)`,
+		24*textScale+1, 50*textScale+1)
 
 	// STOCK table.
-	tpccStockSchemaBase = `(
+	tpccStockSchemaBase = fmt.Sprintf(`(
 		s_i_id       integer       not null,
 		s_w_id       integer       not null,
 		s_quantity   integer,
-		s_dist_01    char(24),
-		s_dist_02    char(24),
-		s_dist_03    char(24),
-		s_dist_04    char(24),
-		s_dist_05    char(24),
-		s_dist_06    char(24),
-		s_dist_07    char(24),
-		s_dist_08    char(24),
-		s_dist_09    char(24),
-		s_dist_10    char(24),
+		s_dist_01    char(%d),
+		s_dist_02    char(%d),
+		s_dist_03    char(%d),
+		s_dist_04    char(%d),
+		s_dist_05    char(%d),
+		s_dist_06    char(%d),
+		s_dist_07    char(%d),
+		s_dist_08    char(%d),
+		s_dist_09    char(%d),
+		s_dist_10    char(%d),
 		s_ytd        integer,
 		s_order_cnt  integer,
 		s_remote_cnt integer,
-		s_data       varchar(50),
-		primary key (s_w_id, s_i_id)`
+		s_data       varchar(%d),
+		primary key (s_w_id, s_i_id)`,
+		24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 24*textScale+1, 50*textScale+1)
 	deprecatedTpccStockSchemaFkSuffix = `
 		index stock_item_fk_idx (s_i_id)`
 
 	// ORDER-LINE table.
-	tpccOrderLineSchemaBase = `(
+	tpccOrderLineSchemaBase = fmt.Sprintf(`(
 		ol_o_id         integer   not null,
 		ol_d_id         integer   not null,
 		ol_w_id         integer   not null,
@@ -168,8 +175,9 @@ const (
 		ol_delivery_d   timestamp,
 		ol_quantity     integer,
 		ol_amount       decimal(6,2),
-		ol_dist_info    char(24),
-		primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number)`
+		ol_dist_info    char(%d),
+		primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number)`,
+		24*textScale+1)
 	deprecatedTpccOrderLineSchemaFkSuffix = `
 		index order_line_stock_fk_idx (ol_supply_w_id, ol_i_id)`
 

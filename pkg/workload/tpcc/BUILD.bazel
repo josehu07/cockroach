@@ -29,6 +29,7 @@ go_library(
         "//pkg/sql/types",
         "//pkg/util/bufalloc",
         "//pkg/util/ctxgroup",
+        "//pkg/util/envutil",
         "//pkg/util/log",
         "//pkg/util/retry",
         "//pkg/util/syncutil",

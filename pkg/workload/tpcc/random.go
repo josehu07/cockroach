@@ -11,7 +11,10 @@
 package tpcc
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/cockroach/pkg/util/bufalloc"
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/workload/workloadimpl"
 	"golang.org/x/exp/rand"
 )
@@ -19,6 +22,9 @@ import (
 var cLastTokens = [...]string{
 	"BAR", "OUGHT", "ABLE", "PRI", "PRES",
 	"ESE", "ANTI", "CALLY", "ATION", "EING"}
+
+// CW: added
+var textScale = envutil.EnvOrDefaultInt("COCKROACH_TPCC_TEXT_SCALE", 256)
 
 func (w *tpcc) initNonUniformRandomConstants() {
 	rng := rand.New(rand.NewSource(RandomSeed.Seed()))
@@ -56,6 +62,12 @@ func randStringFromAlphabet(
 	if size == 0 {
 		return nil
 	}
+
+	// CW: added for reality
+	if textScale < 1 || textScale > 4096 {
+		panic(fmt.Sprintf("invalid tpcc textScale %d: expect in range [1, 4096]", textScale))
+	}
+	size *= textScale
 
 	var b []byte
 	*a, b = a.Alloc(size, 0 /* extraCap */)

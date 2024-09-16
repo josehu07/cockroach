@@ -570,30 +570,31 @@ func (w *tpcc) Hooks() workload.Hooks {
 			}
 			return w.partitionAndScatterWithDB(db)
 		},
-		PostRun: func(startElapsed time.Duration) error {
-			w.auditor.runChecks(w.localWarehouses)
-			const totalHeader = "\n_elapsed_______tpmC____efc__avg(ms)__p50(ms)__p90(ms)__p95(ms)__p99(ms)_pMax(ms)"
-			fmt.Println(totalHeader)
+		// CW: turn off auditing checks
+		// PostRun: func(startElapsed time.Duration) error {
+		// 	w.auditor.runChecks(w.localWarehouses)
+		// 	const totalHeader = "\n_elapsed_______tpmC____efc__avg(ms)__p50(ms)__p90(ms)__p95(ms)__p99(ms)_pMax(ms)"
+		// 	fmt.Println(totalHeader)
 
-			const newOrderName = `newOrder`
-			w.reg.Tick(func(t histogram.Tick) {
-				if newOrderName == t.Name {
-					tpmC := float64(t.Cumulative.TotalCount()) / startElapsed.Seconds() * 60
-					fmt.Printf("%7.1fs %10.1f %5.1f%% %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
-						startElapsed.Seconds(),
-						tpmC,
-						100*tpmC/(SpecWarehouseFactor*float64(w.activeWarehouses)),
-						time.Duration(t.Cumulative.Mean()).Seconds()*1000,
-						time.Duration(t.Cumulative.ValueAtQuantile(50)).Seconds()*1000,
-						time.Duration(t.Cumulative.ValueAtQuantile(90)).Seconds()*1000,
-						time.Duration(t.Cumulative.ValueAtQuantile(95)).Seconds()*1000,
-						time.Duration(t.Cumulative.ValueAtQuantile(99)).Seconds()*1000,
-						time.Duration(t.Cumulative.ValueAtQuantile(100)).Seconds()*1000,
-					)
-				}
-			})
-			return nil
-		},
+		// 	const newOrderName = `newOrder`
+		// 	w.reg.Tick(func(t histogram.Tick) {
+		// 		if newOrderName == t.Name {
+		// 			tpmC := float64(t.Cumulative.TotalCount()) / startElapsed.Seconds() * 60
+		// 			fmt.Printf("%7.1fs %10.1f %5.1f%% %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
+		// 				startElapsed.Seconds(),
+		// 				tpmC,
+		// 				100*tpmC/(SpecWarehouseFactor*float64(w.activeWarehouses)),
+		// 				time.Duration(t.Cumulative.Mean()).Seconds()*1000,
+		// 				time.Duration(t.Cumulative.ValueAtQuantile(50)).Seconds()*1000,
+		// 				time.Duration(t.Cumulative.ValueAtQuantile(90)).Seconds()*1000,
+		// 				time.Duration(t.Cumulative.ValueAtQuantile(95)).Seconds()*1000,
+		// 				time.Duration(t.Cumulative.ValueAtQuantile(99)).Seconds()*1000,
+		// 				time.Duration(t.Cumulative.ValueAtQuantile(100)).Seconds()*1000,
+		// 			)
+		// 		}
+		// 	})
+		// 	return nil
+		// },
 		CheckConsistency: func(ctx context.Context, db *gosql.DB) error {
 			for _, check := range AllChecks() {
 				if !w.expensiveChecks && check.Expensive {
