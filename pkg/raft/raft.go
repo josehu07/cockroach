@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -273,6 +274,12 @@ type Config struct {
 	// CRDBVersion exposes the active version to Raft. This helps version-gating
 	// features.
 	CRDBVersion clusterversion.Handle
+
+	// CW: whether to turn on AppendEntries size profiling
+	MsgSizeProfiling bool
+
+	// CW: remember the range ID of my Raft group
+	RaftGroupRangeID int64
 }
 
 func (c *Config) validate() error {
@@ -435,6 +442,10 @@ type raft struct {
 	logger        Logger
 	storeLiveness raftstoreliveness.StoreLiveness
 	crdbVersion   clusterversion.Handle
+
+	// CW: addedd
+	profileChan  chan msgSizeProfile
+	groupRangeID int64
 }
 
 func newRaft(c *Config) *raft {
@@ -445,6 +456,14 @@ func newRaft(c *Config) *raft {
 	hs, cs, err := c.Storage.InitialState()
 	if err != nil {
 		panic(err) // TODO(bdarnell)
+	}
+
+	// CW: added
+	var profileChan chan msgSizeProfile
+	if c.MsgSizeProfiling {
+		profileChan = make(chan msgSizeProfile)
+	} else {
+		profileChan = nil
 	}
 
 	r := &raft{
@@ -466,6 +485,9 @@ func newRaft(c *Config) *raft {
 		stepDownOnRemoval:           c.StepDownOnRemoval,
 		storeLiveness:               c.StoreLiveness,
 		crdbVersion:                 c.CRDBVersion,
+		// CW: added
+		profileChan:  profileChan,
+		groupRangeID: c.RaftGroupRangeID,
 	}
 	lastID := r.raftLog.lastEntryID()
 
@@ -496,10 +518,56 @@ func newRaft(c *Config) *raft {
 		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
 	}
 
+	// CW: message size logger goroutine
+	if c.MsgSizeProfiling {
+		go r.msgSizeProfileLogger(profileChan)
+	}
+
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
 	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
 		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, lastID.index, lastID.term)
 	return r
+}
+
+// CW: message size channel data type
+type msgSizeProfile struct {
+	numEntries int
+	numBytes   uint64
+}
+
+// CW: message size logger func
+func (r *raft) msgSizeProfileLogger(profileChan chan msgSizeProfile) {
+	r.logger.Infof("msgSizeProfileLogger on %d started", r.id)
+
+	// using hardcoded folder path
+	fname := fmt.Sprintf("/tmp/cockroach/size-profiles/%d-%d.log", r.groupRangeID, r.id)
+	flog, err := os.OpenFile(fname, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		r.logger.Errorf("failed to open file %s: %v", fname, err)
+		return
+	}
+	defer flog.Close()
+
+	// observed that the same entries,bytes pair tend to repeat multiple times consecutively,
+	// thus we write a single row with a repeat_cnt for each such pair's occurrence
+	flog.WriteString("num_entries,num_bytes,repeat_cnt\n")
+	lastProfile := msgSizeProfile{}
+	repeatCnt := 0
+
+	for profile := range profileChan {
+		if profile.numEntries == 0 && profile.numBytes == 0 {
+			continue
+		}
+		if profile == lastProfile {
+			repeatCnt++
+		} else {
+			if repeatCnt > 0 {
+				flog.WriteString(fmt.Sprintf("%d,%d,%d\n", lastProfile.numEntries, lastProfile.numBytes, repeatCnt))
+			}
+			repeatCnt = 1
+			lastProfile = profile
+		}
+	}
 }
 
 func (r *raft) hasLeader() bool { return r.lead != None }
@@ -653,6 +721,12 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		Commit:  commit,
 		Match:   pr.Match,
 	})
+	if len(entries) > 0 || payloadsSize(entries) > 0 {
+		r.profileChan <- msgSizeProfile{
+			numEntries: len(entries),
+			numBytes:   uint64(payloadsSize(entries)),
+		}
+	} // CW: added
 	pr.SentEntries(len(entries), uint64(payloadsSize(entries)))
 	pr.MaybeUpdateSentCommit(commit)
 	return true

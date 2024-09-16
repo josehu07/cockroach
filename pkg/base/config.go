@@ -284,7 +284,7 @@ var (
 	// defaultRaftMaxSizePerMsg specifies the maximum aggregate byte size of Raft
 	// log entries that a leader will send to followers in a single MsgApp.
 	defaultRaftMaxSizePerMsg = envutil.EnvOrDefaultInt(
-		"COCKROACH_RAFT_MAX_SIZE_PER_MSG", 32<<10 /* 32 KB */)
+		"COCKROACH_RAFT_MAX_SIZE_PER_MSG", 64<<20 /* 64 MB */) // CW: reverted
 
 	// defaultRaftMaxSizeCommittedSizePerReady specifies the maximum aggregate
 	// byte size of the committed log entries which a node will receive in a
@@ -295,7 +295,7 @@ var (
 	// defaultRaftMaxInflightMsgs specifies how many "inflight" MsgApps a leader
 	// will send to a given follower without hearing a response.
 	defaultRaftMaxInflightMsgs = envutil.EnvOrDefaultInt(
-		"COCKROACH_RAFT_MAX_INFLIGHT_MSGS", 128)
+		"COCKROACH_RAFT_MAX_INFLIGHT_MSGS", 1024) // CW: reverted
 
 	// defaultRaftMaxInflightBytes specifies the maximum aggregate byte size of
 	// Raft log entries that a leader will send to a follower without hearing
@@ -314,7 +314,11 @@ var (
 	// Per the bandwidth-delay product, this will limit per-range throughput to
 	// 64 MB/s at 500 ms RTT, 320 MB/s at 100 ms RTT, and 3.2 GB/s at 10 ms RTT.
 	defaultRaftMaxInflightBytes = envutil.EnvOrDefaultBytes(
-		"COCKROACH_RAFT_MAX_INFLIGHT_BYTES", 32<<20 /* 32 MB */)
+		"COCKROACH_RAFT_MAX_INFLIGHT_BYTES", 0 /* auto */) // CW: reverted
+
+	// CW: whether to enable AppendEntries size profiling.
+	defaultRaftMsgSizeProfiling = envutil.EnvOrDefaultBool(
+		"COCKROACH_RAFT_MSG_SIZE_PROFILING", false) // CW: added
 )
 
 // Config is embedded by server.Config. A base config is not meant to be used
@@ -625,6 +629,9 @@ type RaftConfig struct {
 	//
 	// -1 to disable.
 	RaftDelaySplitToSuppressSnapshot time.Duration
+
+	// CW: whether to enable AppendEntries size profiling.
+	RaftMsgSizeProfiling bool
 }
 
 // SetDefaults initializes unset fields.
@@ -704,6 +711,9 @@ func (cfg *RaftConfig) SetDefaults() {
 	if cfg.RaftProposalQuota > int64(cfg.RaftMaxUncommittedEntriesSize) {
 		panic("raft proposal quota should not be above max uncommitted entries size")
 	}
+
+	// CW: added
+	cfg.RaftMsgSizeProfiling = defaultRaftMsgSizeProfiling
 }
 
 // RaftElectionTimeout returns the raft election timeout, as computed from the

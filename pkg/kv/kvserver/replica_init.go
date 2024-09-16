@@ -310,6 +310,7 @@ func (r *Replica) initRaftGroupRaftMuLockedReplicaMuLocked() error {
 	rg, err := raft.NewRawNode(newRaftConfig(
 		ctx,
 		(*replicaRaftStorage)(r),
+		r.RangeID,
 		raftpb.PeerID(r.replicaID),
 		r.mu.state.RaftAppliedIndex,
 		r.store.cfg,

@@ -385,17 +385,19 @@ func testStoreConfig(clock *hlc.Clock, version roachpb.Version) StoreConfig {
 	return sc
 }
 
+// CW: added rangeId
 func newRaftConfig(
 	ctx context.Context,
 	strg raft.Storage,
-	id raftpb.PeerID,
+	rangeID roachpb.RangeID,
+	replicaID raftpb.PeerID,
 	appliedIndex kvpb.RaftIndex,
 	storeCfg StoreConfig,
 	logger raft.Logger,
 	storeLiveness raftstoreliveness.StoreLiveness,
 ) *raft.Config {
 	return &raft.Config{
-		ID:                          id,
+		ID:                          replicaID,
 		Applied:                     uint64(appliedIndex),
 		AsyncStorageWrites:          true,
 		ElectionTick:                storeCfg.RaftElectionTimeoutTicks,
@@ -419,6 +421,10 @@ func newRaftConfig(
 		PreVote:     true,
 		CheckQuorum: storeCfg.RaftEnableCheckQuorum,
 		CRDBVersion: storeCfg.Settings.Version,
+
+		// CW: added
+		MsgSizeProfiling: storeCfg.RaftMsgSizeProfiling,
+		RaftGroupRangeID: int64(rangeID),
 	}
 }
 
