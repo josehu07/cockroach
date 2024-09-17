@@ -11912,3 +11912,13 @@ def go_deps():
             "https://storage.googleapis.com/cockroach-godeps/gomod/gotest.tools/v3/tools_gotest_v3-v3.2.0.zip",
         ],
     )
+
+    # CW: added
+    go_repository(
+        name = "com_github_klauspost_reedsolomon",
+        build_file_proto_mode = "disable_global",
+        importpath = "github.com/klauspost/reedsolomon",
+        vcs = "git",
+        remote = "https://github.com/klauspost/reedsolomon",
+        commit = "6a9df697dce81ba20ee4aa223ef76dacd172cb4d",
+    )

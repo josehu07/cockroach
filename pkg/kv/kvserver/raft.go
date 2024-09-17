@@ -58,28 +58,30 @@ type raftLogger struct {
 	ctx context.Context
 }
 
+// CW: all allowed always
+
 func (r *raftLogger) Debug(v ...interface{}) {
-	if log.V(3) {
-		log.InfofDepth(r.ctx, 1, "", v...)
-	}
+	// if log.V(3) {
+	log.InfofDepth(r.ctx, 1, "", v...)
+	// }
 }
 
 func (r *raftLogger) Debugf(format string, v ...interface{}) {
-	if log.V(3) {
-		log.InfofDepth(r.ctx, 1, format, v...)
-	}
+	// if log.V(3) {
+	log.InfofDepth(r.ctx, 1, format, v...)
+	// }
 }
 
 func (r *raftLogger) Info(v ...interface{}) {
-	if log.V(2) {
-		log.InfofDepth(r.ctx, 1, "", v...)
-	}
+	// if log.V(2) {
+	log.InfofDepth(r.ctx, 1, "", v...)
+	// }
 }
 
 func (r *raftLogger) Infof(format string, v ...interface{}) {
-	if log.V(2) {
-		log.InfofDepth(r.ctx, 1, format, v...)
-	}
+	// if log.V(2) {
+	log.InfofDepth(r.ctx, 1, format, v...)
+	// }
 }
 
 func (r *raftLogger) Warning(v ...interface{}) {

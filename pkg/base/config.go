@@ -316,9 +316,13 @@ var (
 	defaultRaftMaxInflightBytes = envutil.EnvOrDefaultBytes(
 		"COCKROACH_RAFT_MAX_INFLIGHT_BYTES", 0 /* auto */) // CW: reverted
 
-	// CW: whether to enable AppendEntries size profiling.
+	// CW: whether to turn on AppendEntries size profiling.
 	defaultRaftMsgSizeProfiling = envutil.EnvOrDefaultBool(
 		"COCKROACH_RAFT_MSG_SIZE_PROFILING", false) // CW: added
+
+	// CW: whether to enable Crossword protocol.
+	defaultRaftEnableCrossword = envutil.EnvOrDefaultBool(
+		"COCKROACH_RAFT_ENABLE_CROSSWORD", false) // CW: added
 )
 
 // Config is embedded by server.Config. A base config is not meant to be used
@@ -632,6 +636,9 @@ type RaftConfig struct {
 
 	// CW: whether to enable AppendEntries size profiling.
 	RaftMsgSizeProfiling bool
+
+	// CW: whether to enable Crossword protocol.
+	RaftEnableCrossword bool
 }
 
 // SetDefaults initializes unset fields.
@@ -714,6 +721,7 @@ func (cfg *RaftConfig) SetDefaults() {
 
 	// CW: added
 	cfg.RaftMsgSizeProfiling = defaultRaftMsgSizeProfiling
+	cfg.RaftEnableCrossword = defaultRaftEnableCrossword
 }
 
 // RaftElectionTimeout returns the raft election timeout, as computed from the

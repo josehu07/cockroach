@@ -17,7 +17,7 @@ require (
 	golang.org/x/net v0.28.0
 	golang.org/x/oauth2 v0.7.0
 	golang.org/x/sync v0.8.0
-	golang.org/x/sys v0.23.0
+	golang.org/x/sys v0.24.0
 	golang.org/x/text v0.17.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.24.0
@@ -181,6 +181,7 @@ require (
 	github.com/kisielk/gotool v1.0.0
 	github.com/klauspost/compress v1.17.8
 	github.com/klauspost/pgzip v1.2.5
+	github.com/klauspost/reedsolomon v1.12.4
 	github.com/knz/bubbline v0.0.0-20230422210153-e176cdfe1c43
 	github.com/knz/strtime v0.0.0-20200318182718-be999391ffa9
 	github.com/kr/pretty v0.3.1
@@ -366,7 +367,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
-	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.2 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
 	github.com/lestrrat-go/httprc v1.0.6 // indirect

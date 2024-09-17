@@ -36,6 +36,8 @@ import (
 	pb "github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftstoreliveness"
 	"github.com/cockroachdb/cockroach/pkg/raft/tracker"
+
+	rs "github.com/klauspost/reedsolomon"
 )
 
 const (
@@ -275,10 +277,13 @@ type Config struct {
 	// features.
 	CRDBVersion clusterversion.Handle
 
-	// CW: whether to turn on AppendEntries size profiling
+	// CW: whether to turn on AppendEntries size profiling.
 	MsgSizeProfiling bool
 
-	// CW: remember the range ID of my Raft group
+	// CW: whether to enable Crossword protocol.
+	EnableCrossword bool
+
+	// CW: remember the range ID of my Raft group.
 	RaftGroupRangeID int64
 }
 
@@ -443,9 +448,10 @@ type raft struct {
 	storeLiveness raftstoreliveness.StoreLiveness
 	crdbVersion   clusterversion.Handle
 
-	// CW: addedd
+	// CW: added
 	profileChan  chan msgSizeProfile
 	groupRangeID int64
+	rscoders     map[uint]*rs.Encoder
 }
 
 func newRaft(c *Config) *raft {
@@ -488,6 +494,7 @@ func newRaft(c *Config) *raft {
 		// CW: added
 		profileChan:  profileChan,
 		groupRangeID: c.RaftGroupRangeID,
+		rscoders:     make(map[uint]*rs.Encoder),
 	}
 	lastID := r.raftLog.lastEntryID()
 
@@ -520,7 +527,15 @@ func newRaft(c *Config) *raft {
 
 	// CW: message size logger goroutine
 	if c.MsgSizeProfiling {
+		r.logger.Infof("newRaft message size profiling turned on")
 		go r.msgSizeProfileLogger(profileChan)
+	}
+
+	// CW: TODO: impl me
+	if c.EnableCrossword {
+		r.logger.Infof("newRaft has Crossword protocol enabled")
+		testCw := r.newRSCodeword(3, 2)
+		r.logger.Infof("testing RS codeward util: %v", testCw)
 	}
 
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
