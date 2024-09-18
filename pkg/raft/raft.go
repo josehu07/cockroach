@@ -36,8 +36,6 @@ import (
 	pb "github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftstoreliveness"
 	"github.com/cockroachdb/cockroach/pkg/raft/tracker"
-
-	rs "github.com/klauspost/reedsolomon"
 )
 
 const (
@@ -451,7 +449,7 @@ type raft struct {
 	// CW: added
 	profileChan  chan msgSizeProfile
 	groupRangeID int64
-	rscoders     map[uint]*rs.Encoder
+	rscoders     map[int]rsCoder // cluster size -> coder
 }
 
 func newRaft(c *Config) *raft {
@@ -494,7 +492,7 @@ func newRaft(c *Config) *raft {
 		// CW: added
 		profileChan:  profileChan,
 		groupRangeID: c.RaftGroupRangeID,
-		rscoders:     make(map[uint]*rs.Encoder),
+		rscoders:     make(map[int]rsCoder),
 	}
 	lastID := r.raftLog.lastEntryID()
 
@@ -534,8 +532,14 @@ func newRaft(c *Config) *raft {
 	// CW: TODO: impl me
 	if c.EnableCrossword {
 		r.logger.Infof("newRaft has Crossword protocol enabled")
-		testCw := r.newRSCodeword(3, 2)
-		r.logger.Infof("testing RS codeward util: %v", testCw)
+
+		numDataShards, numParityShards := 3, 2
+		if coder, err := newCoder(numDataShards, numParityShards); err != nil {
+			r.logger.Errorf("failed to create RS coder: %v", err)
+			return nil
+		} else {
+			r.rscoders[numDataShards+numParityShards] = coder
+		}
 	}
 
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
@@ -736,10 +740,12 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		Commit:  commit,
 		Match:   pr.Match,
 	})
-	if len(entries) > 0 || payloadsSize(entries) > 0 {
-		r.profileChan <- msgSizeProfile{
-			numEntries: len(entries),
-			numBytes:   uint64(payloadsSize(entries)),
+	if r.profileChan != nil {
+		if len(entries) > 0 || payloadsSize(entries) > 0 {
+			r.profileChan <- msgSizeProfile{
+				numEntries: len(entries),
+				numBytes:   uint64(payloadsSize(entries)),
+			}
 		}
 	} // CW: added
 	pr.SentEntries(len(entries), uint64(payloadsSize(entries)))
