@@ -199,6 +199,9 @@ func describeMessageWithIndent(indent string, m pb.Message, f EntryFormatter) st
 		}
 		fmt.Fprintf(&buf, "\n%s]", indent)
 	}
+	if m.EntriesCodeword != nil {
+		fmt.Fprintf(&buf, " Codeword:%v", *m.EntriesCodeword)
+	}
 	return buf.String()
 }
 

@@ -447,9 +447,10 @@ type raft struct {
 	crdbVersion   clusterversion.Handle
 
 	// CW: added
-	profileChan  chan msgSizeProfile
-	groupRangeID int64
-	rscoders     map[int]rsCoder // cluster size -> coder
+	profileChan     chan msgSizeProfile
+	groupRangeID    int64
+	enableCrossword bool
+	rscoders        map[int]rsCoder // cluster size -> coder
 }
 
 func newRaft(c *Config) *raft {
@@ -490,9 +491,10 @@ func newRaft(c *Config) *raft {
 		storeLiveness:               c.StoreLiveness,
 		crdbVersion:                 c.CRDBVersion,
 		// CW: added
-		profileChan:  profileChan,
-		groupRangeID: c.RaftGroupRangeID,
-		rscoders:     make(map[int]rsCoder),
+		profileChan:     profileChan,
+		groupRangeID:    c.RaftGroupRangeID,
+		enableCrossword: c.EnableCrossword,
+		rscoders:        make(map[int]rsCoder),
 	}
 	lastID := r.raftLog.lastEntryID()
 
@@ -525,27 +527,35 @@ func newRaft(c *Config) *raft {
 
 	// CW: message size logger goroutine
 	if c.MsgSizeProfiling {
-		r.logger.Infof("newRaft message size profiling turned on")
+		r.logger.Infof("newRaft %x message size profiling turned on", r.id)
 		go r.msgSizeProfileLogger(profileChan)
 	}
 
-	// CW: TODO: impl me
+	// CW: if Crossword enabled
 	if c.EnableCrossword {
-		r.logger.Infof("newRaft has Crossword protocol enabled")
-
-		numDataShards, numParityShards := 3, 2
-		if coder, err := newCoder(numDataShards, numParityShards); err != nil {
-			r.logger.Errorf("failed to create RS coder: %v", err)
-			return nil
-		} else {
-			r.rscoders[numDataShards+numParityShards] = coder
-		}
+		r.logger.Infof("newRaft %x has Crossword protocol enabled", r.id)
 	}
 
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
 	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
 		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, lastID.index, lastID.term)
 	return r
+}
+
+// CW: get the RS coder for a given shard dimension
+func (r *raft) getCoder(numDataShards, numParityShards int) rsCoder {
+	if coder, ok := r.rscoders[numDataShards+numParityShards]; ok {
+		return coder
+	}
+
+	// not found, create new one with this dimension
+	if coder, err := newCoder(numDataShards, numParityShards); err != nil {
+		r.logger.Panicf("failed to create new RS coder (%d, %d): %v", numDataShards, numParityShards, err)
+		return nil
+	} else {
+		r.rscoders[numDataShards+numParityShards] = coder
+		return coder
+	}
 }
 
 // CW: message size channel data type
@@ -730,25 +740,69 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		}
 	}
 
+	// CW: modified
+	payloadsSize := uint64(payloadsSize(entries))
+
 	// Send the MsgApp, and update the progress accordingly.
-	r.send(pb.Message{
-		To:      to,
-		Type:    pb.MsgApp,
-		Index:   prevIndex,
-		LogTerm: prevTerm,
-		Entries: entries,
-		Commit:  commit,
-		Match:   pr.Match,
-	})
-	if r.profileChan != nil {
-		if len(entries) > 0 || payloadsSize(entries) > 0 {
-			r.profileChan <- msgSizeProfile{
-				numEntries: len(entries),
-				numBytes:   uint64(payloadsSize(entries)),
+	if r.enableCrossword && len(entries) > 0 && payloadsSize > 4096 {
+		// CW: FIXME: correct Crossword logic
+		numDataShards, numParityShards := int(3), int(2)
+		coder := r.getCoder(numDataShards, numParityShards)
+		codeword := newCodeword[raftEntries](numDataShards, numParityShards)
+		if err = codeword.fromData((*raftEntries)(&entries), coder); err != nil {
+			r.logger.Errorf("%x [RS] failed to create codeword from entries: %v", r.id, err)
+			return false
+		}
+		if err = codeword.computeParity(coder); err != nil {
+			r.logger.Errorf("%x [RS] failed to compute parity for codeword: %v", r.id, err)
+			return false
+		}
+		codeword.shards[1] = nil
+		codeword.shards[3] = nil
+
+		entriesNoData := make([]pb.Entry, len(entries))
+		for i := range entries {
+			// the entries slice now don't carry data
+			entriesNoData[i].Term = entries[i].Term
+			entriesNoData[i].Index = entries[i].Index
+			entriesNoData[i].Type = entries[i].Type
+			entriesNoData[i].Data = nil
+		}
+
+		r.send(pb.Message{
+			To:      to,
+			Type:    pb.MsgApp,
+			Index:   prevIndex,
+			LogTerm: prevTerm,
+			Entries: entries,
+			// Entries:         entriesNoData,
+			Commit:          commit,
+			Match:           pr.Match,
+			EntriesCodeword: codeword.intoProto(),
+		})
+	} else {
+		// vanilla Raft
+		r.send(pb.Message{
+			To:      to,
+			Type:    pb.MsgApp,
+			Index:   prevIndex,
+			LogTerm: prevTerm,
+			Entries: entries,
+			Commit:  commit,
+			Match:   pr.Match,
+		})
+
+		if r.profileChan != nil {
+			if len(entries) > 0 || payloadsSize > 0 {
+				r.profileChan <- msgSizeProfile{
+					numEntries: len(entries),
+					numBytes:   payloadsSize,
+				}
 			}
 		}
-	} // CW: added
-	pr.SentEntries(len(entries), uint64(payloadsSize(entries)))
+	}
+
+	pr.SentEntries(len(entries), payloadsSize)
 	pr.MaybeUpdateSentCommit(commit)
 	return true
 }
@@ -2048,6 +2102,33 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 	if r.raftLog.maybeAppend(a) {
+		// CW: entries data need to be used now, construct from codeward if necessary
+		if r.enableCrossword && m.EntriesCodeword != nil {
+			numDataShards, numParityShards := int(m.EntriesCodeword.NumDataShards), int(m.EntriesCodeword.NumParityShards)
+			coder := r.getCoder(numDataShards, numParityShards)
+			codeword := newCodeword[raftEntries](numDataShards, numParityShards)
+			if err := codeword.fromProto(m.EntriesCodeword); err != nil {
+				r.logger.Errorf("%x [RS] failed to read codeword from protobuf: %v", r.id, err)
+				return
+			}
+
+			if codeword.availDataShards() < numDataShards {
+				if err := codeword.reconstructData(coder); err != nil {
+					r.logger.Errorf("%x [RS] failed to reconstruct data shards: %v", r.id, err)
+					return
+				}
+			}
+
+			// entriesReal, err := codeword.intoData(coder)
+			// if err != nil {
+			// 	r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
+			// 	return
+			// }
+			// m.EntriesCodeword = nil
+			// m.Entries = *entriesReal
+			// a.entries = *entriesReal
+		}
+
 		// TODO(pav-kv): make it possible to commit even if the append did not
 		// succeed or is stale. If accTerm >= m.Term, then our log contains all
 		// committed entries at m.Term (by raft invariants), so it is safe to bump

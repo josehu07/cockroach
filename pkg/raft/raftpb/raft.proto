@@ -37,6 +37,14 @@ message Snapshot {
   optional SnapshotMetadata metadata = 2 [(gogoproto.nullable) = false];
 }
 
+// CW: added
+message EntriesCodeword {
+  optional int32 numDataShards = 1 [(gogoproto.nullable) = false];
+  optional int32 numParityShards = 2 [(gogoproto.nullable) = false];
+  repeated bytes shards = 3 [(gogoproto.nullable) = false];
+  optional uint64 dataSize = 4 [(gogoproto.nullable) = false];
+}
+
 // For description of different message types, see:
 // https://pkg.go.dev/go.etcd.io/raft/v3#hdr-MessageType
 enum MessageType {
@@ -125,6 +133,10 @@ message Message {
   // follower. This can be 0 if the leader hasn't yet established the follower's
   // match index, or for backward compatibility.
   optional uint64 match = 15 [(gogoproto.nullable) = false];
+
+  // CW: if entriesCodeword is set, entries should be empty and the content is
+  //     erasure coded into the codeword instead.
+  optional EntriesCodeword entriesCodeword = 18 [(gogoproto.nullable) = true];
 }
 
 message HardState {

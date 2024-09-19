@@ -44,14 +44,14 @@ func (ent *raftEntry) rsUnmarshal(buf []byte) error {
 }
 
 // Alias for []pb.Entry, whose pointers implement marshallablePtr.
-type raftEntries []raftEntry
+type raftEntries []pb.Entry
 
 func (ents *raftEntries) rsSize() (uint64, []uint32) {
 	var dataSize uint64
 
 	inputSizes := make([]uint32, len(*ents))
-	for i, e := range *ents {
-		inputSize, _ := e.rsSize()
+	for i := range *ents {
+		inputSize, _ := (*raftEntry)(&(*ents)[i]).rsSize()
 		inputSizes[i] = uint32(inputSize)
 		dataSize += 4 + inputSize
 	}
@@ -64,12 +64,12 @@ func (ents *raftEntries) rsMarshalTo(buf []byte, inputSizes []uint32) error {
 	binary.BigEndian.PutUint32(buf[:4], uint32(len(*ents)))
 	curr := 4
 
-	for i, e := range *ents {
+	for i := range *ents {
 		binary.BigEndian.PutUint32(buf[curr:curr+4], inputSizes[i])
 		curr += 4
 
 		inputSize := int(inputSizes[i])
-		if err := e.rsMarshalTo(buf[curr:curr+inputSize], nil); err != nil {
+		if err := (*raftEntry)(&(*ents)[i]).rsMarshalTo(buf[curr:curr+inputSize], nil); err != nil {
 			return err
 		}
 		curr += inputSize
@@ -92,7 +92,7 @@ func (ents *raftEntries) rsUnmarshal(buf []byte) error {
 		curr += 4
 
 		outputSize := int(elemSize)
-		if err := (&(*ents)[i]).rsUnmarshal(buf[curr : curr+outputSize]); err != nil {
+		if err := (*raftEntry)(&(*ents)[i]).rsUnmarshal(buf[curr : curr+outputSize]); err != nil {
 			return err
 		}
 		curr += outputSize
@@ -126,25 +126,28 @@ type rsCodeword[T any, P marshallablePtr[T]] struct {
 	shards          [][]byte
 	shardSize       uint64
 	dataSize        uint64
-	dataRef         P // optional, helps avoid copied unmarshalling in some cases
 }
 
 // Create a new empty RS codeword.
-func newCodeword[T any, P marshallablePtr[T]](coder rsCoder) *rsCodeword[T, P] {
+func newCodeword[T any, P marshallablePtr[T]](numDataShards, numParityShards int) *rsCodeword[T, P] {
 	return &rsCodeword[T, P]{
-		numDataShards:   coder.DataShards(),
-		numParityShards: coder.ParityShards(),
-		shards:          make([][]byte, coder.DataShards()+coder.ParityShards()),
+		numDataShards:   numDataShards,
+		numParityShards: numParityShards,
+		shards:          make([][]byte, numDataShards+numParityShards),
 		shardSize:       0,
 		dataSize:        0,
-		dataRef:         nil,
 	}
+}
+
+func shardPresent(shard []byte) bool {
+	return len(shard) > 0 // non-nil and non-empty
 }
 
 func (cw *rsCodeword[T, P]) String() string {
 	return fmt.Sprintf("RS(%d,%d)/%d/", cw.numDataShards, cw.numParityShards, cw.dataSize)
 }
 
+// Assert shard dimensions match with given coder.
 func (cw *rsCodeword[T, P]) dimsMatch(coder rsCoder) error {
 	if cw.numDataShards != coder.DataShards() || cw.numParityShards != coder.ParityShards() {
 		return fmt.Errorf("(data, parity) pair mismatch: (%d, %d) != (%d, %d)",
@@ -186,7 +189,6 @@ func (cw *rsCodeword[T, P]) fromData(input P, coder rsCoder) error {
 		return err
 	} else {
 		cw.shards = shards
-		cw.dataRef = input
 		return nil
 	}
 }
@@ -205,20 +207,45 @@ func (cw *rsCodeword[T, P]) intoData(coder rsCoder) (P, error) {
 			cw.availDataShards(), cw.numDataShards)
 	}
 
-	if cw.dataRef == nil {
-		var buf bytes.Buffer
-		if err := coder.Join(&buf, cw.shards, int(cw.dataSize)); err != nil {
-			return nil, err
-		}
+	var buf bytes.Buffer
+	if err := coder.Join(&buf, cw.shards, int(cw.dataSize)); err != nil {
+		return nil, err
+	}
 
-		var outputData T
-		output := P(&outputData)
-		if err := output.rsUnmarshal(buf.Bytes()); err != nil {
-			return nil, err
-		}
-		return output, nil
-	} else {
-		return cw.dataRef, nil
+	var outputData T
+	output := P(&outputData)
+	if err := output.rsUnmarshal(buf.Bytes()); err != nil {
+		return nil, err
+	}
+	return output, nil
+}
+
+// Populate fields and shards from a protobuf EntriesCodeword.
+func (cw *rsCodeword[T, P]) fromProto(cwProto *pb.EntriesCodeword) error {
+	if cwProto.NumDataShards == 0 {
+		return fmt.Errorf("proto numDataShards is 0")
+	}
+	if cwProto.NumDataShards+cwProto.NumParityShards != int32(len(cwProto.Shards)) {
+		return fmt.Errorf("(data, parity) pair (%d, %d) mismatch with len(shards) %d",
+			cwProto.NumDataShards, cwProto.NumParityShards, len(cwProto.Shards))
+	}
+
+	cw.numDataShards = int(cwProto.NumDataShards)
+	cw.numParityShards = int(cwProto.NumParityShards)
+	cw.shards = cwProto.Shards
+	cw.shardSize = uint64(len(cwProto.Shards[0]))
+	cw.dataSize = cwProto.DataSize
+	return nil
+}
+
+// Make a protobuf EntriesCodeword for transport out of cw; shards keep reference to the same
+// slices of bytes.
+func (cw *rsCodeword[T, P]) intoProto() *pb.EntriesCodeword {
+	return &pb.EntriesCodeword{
+		NumDataShards:   int32(cw.numDataShards),
+		NumParityShards: int32(cw.numParityShards),
+		Shards:          cw.shards,
+		DataSize:        cw.dataSize,
 	}
 }
 
@@ -231,7 +258,7 @@ func (cw *rsCodeword[T, P]) numShards() int {
 func (cw *rsCodeword[T, P]) availDataShards() int {
 	avail := 0
 	for i := 0; i < cw.numDataShards; i++ {
-		if cw.shards[i] != nil {
+		if shardPresent(cw.shards[i]) {
 			avail++
 		}
 	}
@@ -242,7 +269,7 @@ func (cw *rsCodeword[T, P]) availDataShards() int {
 func (cw *rsCodeword[T, P]) availParityShards() int {
 	avail := 0
 	for i := cw.numDataShards; i < cw.numShards(); i++ {
-		if cw.shards[i] != nil {
+		if shardPresent(cw.shards[i]) {
 			avail++
 		}
 	}
@@ -253,7 +280,7 @@ func (cw *rsCodeword[T, P]) availParityShards() int {
 func (cw *rsCodeword[T, P]) availShards() int {
 	avail := 0
 	for i := 0; i < cw.numShards(); i++ {
-		if cw.shards[i] != nil {
+		if shardPresent(cw.shards[i]) {
 			avail++
 		}
 	}
@@ -264,7 +291,7 @@ func (cw *rsCodeword[T, P]) availShards() int {
 func (cw *rsCodeword[T, P]) availShardsMap() []bool {
 	avail := make([]bool, cw.numShards())
 	for i := 0; i < cw.numShards(); i++ {
-		if cw.shards[i] != nil {
+		if shardPresent(cw.shards[i]) {
 			avail[i] = true
 		}
 	}
@@ -287,8 +314,8 @@ func (cw *rsCodeword[T, P]) computeParity(coder rsCoder) error {
 		}
 	}
 
-	for i, e := range cw.shards {
-		if e == nil {
+	for i, s := range cw.shards {
+		if !shardPresent(s) {
 			if i < cw.numDataShards {
 				return fmt.Errorf("data shard %d is missing", i)
 			} else {
@@ -376,9 +403,8 @@ func (cw *rsCodeword[T, P]) verifyParity(coder rsCoder) error {
 	}
 }
 
-// Creates a new rsCodeword that owns a copy of a subset of the shards, and optionally a
-// pointer to the original data.
-func (cw *rsCodeword[T, P]) subsetCopy(subset []bool, keepDataRef bool) (*rsCodeword[T, P], error) {
+// Creates a new rsCodeword that contains references to a subset of the shards (without copying).
+func (cw *rsCodeword[T, P]) subsetRefs(subset []bool) (*rsCodeword[T, P], error) {
 	if len(subset) != cw.numShards() {
 		return nil, fmt.Errorf("len(subset) %d != numShards %d", len(subset), cw.numShards())
 	}
@@ -386,14 +412,10 @@ func (cw *rsCodeword[T, P]) subsetCopy(subset []bool, keepDataRef bool) (*rsCode
 	shards := make([][]byte, cw.numShards())
 	for i, need := range subset {
 		if need {
-			shards[i] = make([]byte, cw.shardSize)
-			copy(shards[i], cw.shards[i])
+			shards[i] = cw.shards[i]
+		} else {
+			shards[i] = nil
 		}
-	}
-
-	var dataRef P
-	if keepDataRef {
-		dataRef = cw.dataRef
 	}
 
 	return &rsCodeword[T, P]{
@@ -402,7 +424,6 @@ func (cw *rsCodeword[T, P]) subsetCopy(subset []bool, keepDataRef bool) (*rsCode
 		shards:          shards,
 		shardSize:       cw.shardSize,
 		dataSize:        cw.dataSize,
-		dataRef:         dataRef,
 	}, nil
 }
 
@@ -423,7 +444,7 @@ func (cw *rsCodeword[T, P]) absorbOther(other *rsCodeword[T, P]) error {
 	}
 
 	for i := 0; i < cw.numShards(); i++ {
-		if cw.shards[i] == nil && other.shards[i] != nil {
+		if !shardPresent(cw.shards[i]) && shardPresent(other.shards[i]) {
 			cw.shards[i] = other.shards[i]
 		}
 	}

@@ -75,13 +75,12 @@ func TestRSCodingFromIntoData(t *testing.T) {
 
 	coder, err := newCoder(3, 2)
 	assert.Nil(t, err)
-	cw := newCodeword[testEntries](coder)
+	cw := newCodeword[testEntries](3, 2)
 	require.Equal(t, 3, cw.numDataShards)
 	require.Equal(t, 2, cw.numParityShards)
 	require.Equal(t, [][]byte{nil, nil, nil, nil, nil}, cw.shards)
 	require.Equal(t, uint64(0), cw.shardSize)
 	require.Equal(t, uint64(0), cw.dataSize)
-	require.Equal(t, (*testEntries)(nil), cw.dataRef)
 
 	err = cw.fromData(&input, coder)
 	assert.Nil(t, err)
@@ -92,7 +91,6 @@ func TestRSCodingFromIntoData(t *testing.T) {
 	require.Equal(t, []byte("\x00\x00\x00\x00\x00\x00\x00\x00"), cw.shards[4])
 	require.Equal(t, uint64(8), cw.shardSize)
 	require.Equal(t, uint64(22), cw.dataSize)
-	require.Equal(t, input, *cw.dataRef)
 
 	outputPtr, err := cw.intoData(coder)
 	assert.Nil(t, err)
@@ -112,30 +110,28 @@ func TestRSCodingSubsetAbsorb(t *testing.T) {
 
 	coder, err := newCoder(3, 2)
 	assert.Nil(t, err)
-	cwa := newCodeword[testEntries](coder)
+	cwa := newCodeword[testEntries](3, 2)
 	err = cwa.fromData(&input, coder)
 	assert.Nil(t, err)
 
-	_, err = cwa.subsetCopy([]bool{true, false, true, false, false, false}, false)
+	_, err = cwa.subsetRefs([]bool{true, false, true, false, false, false})
 	assert.NotNil(t, err)
 
-	cw01, err := cwa.subsetCopy([]bool{true, false, true, false, false}, false)
+	cw01, err := cwa.subsetRefs([]bool{true, false, true, false, false})
 	assert.Nil(t, err)
 	require.Equal(t, 3, cw01.numDataShards)
 	require.Equal(t, 2, cw01.numParityShards)
 	require.Equal(t, 2, cw01.availDataShards())
 	require.Equal(t, 0, cw01.availParityShards())
-	require.Equal(t, (*testEntries)(nil), cw01.dataRef)
 
-	cw02, err := cwa.subsetCopy([]bool{true, false, false, true, false}, true)
+	cw02, err := cwa.subsetRefs([]bool{true, false, false, true, false})
 	assert.Nil(t, err)
 	require.Equal(t, 3, cw02.numDataShards)
 	require.Equal(t, 2, cw02.numParityShards)
 	require.Equal(t, 1, cw02.availDataShards())
 	require.Equal(t, 1, cw02.availParityShards())
-	require.Equal(t, input, *cw02.dataRef)
 
-	cwb := newCodeword[testEntries](coder)
+	cwb := newCodeword[testEntries](3, 2)
 	err = cwb.absorbOther(cw01)
 	assert.Nil(t, err)
 	require.Equal(t, 2, cwb.availDataShards())
@@ -156,7 +152,7 @@ func TestRSCodingComputeVerify(t *testing.T) {
 
 	coder, err := newCoder(3, 2)
 	assert.Nil(t, err)
-	cw := newCodeword[testEntries](coder)
+	cw := newCodeword[testEntries](3, 2)
 	err = cw.computeParity(coder)
 	assert.NotNil(t, err)
 	err = cw.verifyParity(coder)
@@ -195,7 +191,7 @@ func TestRSCodingReconstruction(t *testing.T) {
 
 	coder, err := newCoder(3, 2)
 	assert.Nil(t, err)
-	cw := newCodeword[testEntries](coder)
+	cw := newCodeword[testEntries](3, 2)
 	err = cw.reconstructAll(coder)
 	assert.NotNil(t, err)
 	err = cw.reconstructData(coder)
