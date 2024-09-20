@@ -424,6 +424,7 @@ func newRaftConfig(
 
 		// CW: added
 		MsgSizeProfiling: storeCfg.RaftMsgSizeProfiling,
+		RSCodingTiming:   storeCfg.RaftRSCodingTiming,
 		EnableCrossword:  storeCfg.RaftEnableCrossword,
 		RaftGroupRangeID: int64(rangeID),
 	}

@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/raft/confchange"
@@ -278,6 +279,9 @@ type Config struct {
 	// CW: whether to turn on AppendEntries size profiling.
 	MsgSizeProfiling bool
 
+	// CW: whether to turn on RS coding timing logging.
+	RSCodingTiming bool
+
 	// CW: whether to enable Crossword protocol.
 	EnableCrossword bool
 
@@ -450,6 +454,7 @@ type raft struct {
 	profileChan     chan msgSizeProfile
 	groupRangeID    int64
 	enableCrossword bool
+	rsCodingTiming  bool
 	rscoders        map[int]rsCoder // cluster size -> coder
 }
 
@@ -494,6 +499,7 @@ func newRaft(c *Config) *raft {
 		profileChan:     profileChan,
 		groupRangeID:    c.RaftGroupRangeID,
 		enableCrossword: c.EnableCrossword,
+		rsCodingTiming:  c.RSCodingTiming,
 		rscoders:        make(map[int]rsCoder),
 	}
 	lastID := r.raftLog.lastEntryID()
@@ -531,9 +537,9 @@ func newRaft(c *Config) *raft {
 		go r.msgSizeProfileLogger(profileChan)
 	}
 
-	// CW: if Crossword enabled
 	if c.EnableCrossword {
 		r.logger.Infof("newRaft %x has Crossword protocol enabled", r.id)
+		r.rsCodingTiming = c.RSCodingTiming
 	}
 
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
@@ -746,6 +752,11 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 	// Send the MsgApp, and update the progress accordingly.
 	if r.enableCrossword && len(entries) > 0 && payloadsSize > 4096 {
 		// CW: FIXME: correct Crossword logic
+		var timeStart time.Time
+		if r.rsCodingTiming {
+			timeStart = time.Now()
+		}
+
 		numDataShards, numParityShards := int(3), int(2)
 		coder := r.getCoder(numDataShards, numParityShards)
 		codeword := newCodeword[raftEntries](numDataShards, numParityShards)
@@ -769,13 +780,16 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 			entriesNoData[i].Data = nil
 		}
 
+		if r.rsCodingTiming {
+			r.logger.Infof("%x [RS] time elapsed @ %d send: %v", r.id, codeword.dataSize, time.Since(timeStart))
+		}
+
 		r.send(pb.Message{
-			To:      to,
-			Type:    pb.MsgApp,
-			Index:   prevIndex,
-			LogTerm: prevTerm,
-			Entries: entries,
-			// Entries:         entriesNoData,
+			To:              to,
+			Type:            pb.MsgApp,
+			Index:           prevIndex,
+			LogTerm:         prevTerm,
+			Entries:         entriesNoData,
 			Commit:          commit,
 			Match:           pr.Match,
 			EntriesCodeword: codeword.intoProto(),
@@ -2101,34 +2115,42 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 			Commit: r.raftLog.committed})
 		return
 	}
-	if r.raftLog.maybeAppend(a) {
-		// CW: entries data need to be used now, construct from codeward if necessary
-		if r.enableCrossword && m.EntriesCodeword != nil {
-			numDataShards, numParityShards := int(m.EntriesCodeword.NumDataShards), int(m.EntriesCodeword.NumParityShards)
-			coder := r.getCoder(numDataShards, numParityShards)
-			codeword := newCodeword[raftEntries](numDataShards, numParityShards)
-			if err := codeword.fromProto(m.EntriesCodeword); err != nil {
-				r.logger.Errorf("%x [RS] failed to read codeword from protobuf: %v", r.id, err)
-				return
-			}
 
-			if codeword.availDataShards() < numDataShards {
-				if err := codeword.reconstructData(coder); err != nil {
-					r.logger.Errorf("%x [RS] failed to reconstruct data shards: %v", r.id, err)
-					return
-				}
-			}
-
-			// entriesReal, err := codeword.intoData(coder)
-			// if err != nil {
-			// 	r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
-			// 	return
-			// }
-			// m.EntriesCodeword = nil
-			// m.Entries = *entriesReal
-			// a.entries = *entriesReal
+	// CW: entries data need to be used now, construct from codeward if necessary
+	if r.enableCrossword && m.EntriesCodeword != nil {
+		var timeStart time.Time
+		if r.rsCodingTiming {
+			timeStart = time.Now()
 		}
 
+		numDataShards, numParityShards := int(m.EntriesCodeword.NumDataShards), int(m.EntriesCodeword.NumParityShards)
+		coder := r.getCoder(numDataShards, numParityShards)
+		codeword := newCodeword[raftEntries](numDataShards, numParityShards)
+		if err := codeword.fromProto(m.EntriesCodeword); err != nil {
+			r.logger.Errorf("%x [RS] failed to read codeword from protobuf: %v", r.id, err)
+			return
+		}
+
+		if codeword.availDataShards() < numDataShards {
+			if err := codeword.reconstructData(coder); err != nil {
+				r.logger.Errorf("%x [RS] failed to reconstruct data shards: %v", r.id, err)
+				return
+			}
+		}
+
+		entriesReal, err := codeword.intoData(coder)
+		if err != nil {
+			r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
+			return
+		}
+		a.entries = *entriesReal
+
+		if r.rsCodingTiming {
+			r.logger.Infof("%x [RS] time elapsed @ %d recv: %v", r.id, codeword.dataSize, time.Since(timeStart))
+		}
+	}
+
+	if r.raftLog.maybeAppend(a) {
 		// TODO(pav-kv): make it possible to commit even if the append did not
 		// succeed or is stale. If accTerm >= m.Term, then our log contains all
 		// committed entries at m.Term (by raft invariants), so it is safe to bump

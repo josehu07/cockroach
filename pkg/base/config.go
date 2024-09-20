@@ -320,6 +320,10 @@ var (
 	defaultRaftMsgSizeProfiling = envutil.EnvOrDefaultBool(
 		"COCKROACH_RAFT_MSG_SIZE_PROFILING", false) // CW: added
 
+	// CW: whether to turn on RS coding timing logging.
+	defaultRaftRSCodingTiming = envutil.EnvOrDefaultBool(
+		"COCKROACH_RAFT_RSCODING_TIMING", false) // CW: added
+
 	// CW: whether to enable Crossword protocol.
 	defaultRaftEnableCrossword = envutil.EnvOrDefaultBool(
 		"COCKROACH_RAFT_ENABLE_CROSSWORD", false) // CW: added
@@ -634,8 +638,11 @@ type RaftConfig struct {
 	// -1 to disable.
 	RaftDelaySplitToSuppressSnapshot time.Duration
 
-	// CW: whether to enable AppendEntries size profiling.
+	// CW: whether to turn on AppendEntries size profiling.
 	RaftMsgSizeProfiling bool
+
+	// CW: whether to turn on RS coding timing logging.
+	RaftRSCodingTiming bool
 
 	// CW: whether to enable Crossword protocol.
 	RaftEnableCrossword bool
@@ -721,6 +728,7 @@ func (cfg *RaftConfig) SetDefaults() {
 
 	// CW: added
 	cfg.RaftMsgSizeProfiling = defaultRaftMsgSizeProfiling
+	cfg.RaftRSCodingTiming = defaultRaftRSCodingTiming
 	cfg.RaftEnableCrossword = defaultRaftEnableCrossword
 }
 
