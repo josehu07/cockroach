@@ -41,8 +41,9 @@ message Snapshot {
 message EntriesCodeword {
   optional int32 numDataShards = 1 [(gogoproto.nullable) = false];
   optional int32 numParityShards = 2 [(gogoproto.nullable) = false];
-  repeated bytes shards = 3 [(gogoproto.nullable) = false];
-  optional uint64 dataSize = 4 [(gogoproto.nullable) = false];
+  repeated bool  shardsMap = 3 [(gogoproto.nullable) = false];
+  repeated bytes shards = 4 [(gogoproto.nullable) = true];
+  optional uint64 dataSize = 5 [(gogoproto.nullable) = false];
 }
 
 // For description of different message types, see:
@@ -134,8 +135,10 @@ message Message {
   // match index, or for backward compatibility.
   optional uint64 match = 15 [(gogoproto.nullable) = false];
 
-  // CW: if entriesCodeword is set, entries should be empty and the content is
-  //     erasure coded into the codeword instead.
+  // CW: For MsgApp, if entriesCodeword is set, entries should be empty and the
+  //     content is erasure coded into the codeword instead.
+  //     For MsgAppResp in response to a coded MsgApp, a dummy entriesCodeword
+  //     will be carried to indicate the shards accepted (or rejected).
   optional EntriesCodeword entriesCodeword = 18 [(gogoproto.nullable) = true];
 }
 

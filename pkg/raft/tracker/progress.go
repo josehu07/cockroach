@@ -222,12 +222,19 @@ func (pr *Progress) MaybeUpdateSentCommit(commit uint64) {
 // MaybeUpdate is called when an MsgAppResp arrives from the follower, with the
 // index acked by it. The method returns false if the given n index comes from
 // an outdated message. Otherwise it updates the progress and returns true.
-func (pr *Progress) MaybeUpdate(n uint64) bool {
+//
+// CW: added cw parameter, if non-nil, pointer to the codeword metadata replied
+//
+//	by the follower so that we can keep track of shards distribution information.
+func (pr *Progress) MaybeUpdate(n uint64, cw *pb.EntriesCodeword) bool {
 	if n <= pr.Match {
 		return false
 	}
 	pr.Match = n
 	pr.Next = max(pr.Next, n+1) // invariant: Match < Next
+
+	// CW: NOTE: skipping shards distribution update for controlled evaluation...
+
 	return true
 }
 

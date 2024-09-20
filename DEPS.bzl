@@ -5656,11 +5656,9 @@ def go_deps():
         name = "com_github_klauspost_cpuid_v2",
         build_file_proto_mode = "disable_global",
         importpath = "github.com/klauspost/cpuid/v2",
-        sha256 = "52c716413296dce2b1698c6cdbc4c53927ce4aee2a60980daf9672e6b6a3b4cb",
-        strip_prefix = "github.com/klauspost/cpuid/v2@v2.0.9",
-        urls = [
-            "https://storage.googleapis.com/cockroach-godeps/gomod/github.com/klauspost/cpuid/v2/com_github_klauspost_cpuid_v2-v2.0.9.zip",
-        ],
+        # TODO: mirror this repo (to fix, run `./dev generate bazel --mirror`)
+        sum = "h1:+StwCXwm9PdpiEkPyzBXIy+M9KUb4ODm0Zarf1kS5BM=",
+        version = "v2.2.8",
     )
     go_repository(
         name = "com_github_klauspost_crc32",
@@ -5681,6 +5679,14 @@ def go_deps():
         urls = [
             "https://storage.googleapis.com/cockroach-godeps/gomod/github.com/klauspost/pgzip/com_github_klauspost_pgzip-v1.2.5.zip",
         ],
+    )
+    go_repository(
+        name = "com_github_klauspost_reedsolomon",
+        build_file_proto_mode = "disable_global",
+        importpath = "github.com/klauspost/reedsolomon",
+        # TODO: mirror this repo (to fix, run `./dev generate bazel --mirror`)
+        sum = "h1:5aDr3ZGoJbgu/8+j45KtUJxzYm8k08JGtB9Wx1VQ4OA=",
+        version = "v1.12.4",
     )
     go_repository(
         name = "com_github_knetic_govaluate",
@@ -11556,11 +11562,9 @@ def go_deps():
         name = "org_golang_x_sys",
         build_file_proto_mode = "disable_global",
         importpath = "golang.org/x/sys",
-        sha256 = "5bf721c4404580d5350d0a0297c1f48f07c05db8a0d2a20677e6cb295380b9a7",
-        strip_prefix = "golang.org/x/sys@v0.23.0",
-        urls = [
-            "https://storage.googleapis.com/cockroach-godeps/gomod/golang.org/x/sys/org_golang_x_sys-v0.23.0.zip",
-        ],
+        # TODO: mirror this repo (to fix, run `./dev generate bazel --mirror`)
+        sum = "h1:Twjiwq9dn6R1fQcyiK+wQyHWfaz/BJB+YIpzU/Cv3Xg=",
+        version = "v0.24.0",
     )
     go_repository(
         name = "org_golang_x_telemetry",
@@ -11911,14 +11915,4 @@ def go_deps():
         urls = [
             "https://storage.googleapis.com/cockroach-godeps/gomod/gotest.tools/v3/tools_gotest_v3-v3.2.0.zip",
         ],
-    )
-
-    # CW: added
-    go_repository(
-        name = "com_github_klauspost_reedsolomon",
-        build_file_proto_mode = "disable_global",
-        importpath = "github.com/klauspost/reedsolomon",
-        vcs = "git",
-        remote = "https://github.com/klauspost/reedsolomon",
-        commit = "6a9df697dce81ba20ee4aa223ef76dacd172cb4d",
     )

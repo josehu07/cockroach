@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/raftlog"
 	"github.com/cockroachdb/cockroach/pkg/raft/confchange"
 	"github.com/cockroachdb/cockroach/pkg/raft/quorum"
 	pb "github.com/cockroachdb/cockroach/pkg/raft/raftpb"
@@ -285,6 +286,15 @@ type Config struct {
 	// CW: whether to enable Crossword protocol.
 	EnableCrossword bool
 
+	// CW: minimum range ID to enable Crossword on (to avoid system db ranges).
+	CrosswordMinRangeID int64
+
+	// CW: size threshold for using 1-shard config when enabling Crossword.
+	CrosswordMinPayload uint64
+
+	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
+	CrosswordNumVoters uint
+
 	// CW: remember the range ID of my Raft group.
 	RaftGroupRangeID int64
 }
@@ -451,11 +461,14 @@ type raft struct {
 	crdbVersion   clusterversion.Handle
 
 	// CW: added
-	profileChan     chan msgSizeProfile
-	groupRangeID    int64
-	enableCrossword bool
-	rsCodingTiming  bool
-	rscoders        map[int]rsCoder // cluster size -> coder
+	profileChan         chan msgSizeProfile
+	groupRangeID        int64
+	enableCrossword     bool
+	rsCodingTiming      bool
+	crosswordMinRangeID int64
+	crosswordMinPayload uint64
+	crosswordNumVoters  uint
+	rscoders            map[int]rsCoder // cluster size -> coder
 }
 
 func newRaft(c *Config) *raft {
@@ -496,11 +509,14 @@ func newRaft(c *Config) *raft {
 		storeLiveness:               c.StoreLiveness,
 		crdbVersion:                 c.CRDBVersion,
 		// CW: added
-		profileChan:     profileChan,
-		groupRangeID:    c.RaftGroupRangeID,
-		enableCrossword: c.EnableCrossword,
-		rsCodingTiming:  c.RSCodingTiming,
-		rscoders:        make(map[int]rsCoder),
+		profileChan:         profileChan,
+		groupRangeID:        c.RaftGroupRangeID,
+		enableCrossword:     c.EnableCrossword,
+		rsCodingTiming:      c.RSCodingTiming,
+		crosswordMinRangeID: c.CrosswordMinRangeID,
+		crosswordMinPayload: c.CrosswordMinPayload,
+		crosswordNumVoters:  c.CrosswordNumVoters,
+		rscoders:            make(map[int]rsCoder),
 	}
 	lastID := r.raftLog.lastEntryID()
 
@@ -533,12 +549,13 @@ func newRaft(c *Config) *raft {
 
 	// CW: message size logger goroutine
 	if c.MsgSizeProfiling {
-		r.logger.Infof("newRaft %x message size profiling turned on", r.id)
+		r.logger.Infof("%x [RS] message size profiling turned on", r.id)
 		go r.msgSizeProfileLogger(profileChan)
 	}
 
 	if c.EnableCrossword {
-		r.logger.Infof("newRaft %x has Crossword protocol enabled", r.id)
+		r.logger.Infof("%x [RS] Crossword on: minRangeID %d minPayload %d numVoters %d",
+			r.id, r.crosswordMinRangeID, r.crosswordMinPayload, r.crosswordNumVoters)
 		r.rsCodingTiming = c.RSCodingTiming
 	}
 
@@ -709,6 +726,39 @@ func (r *raft) send(m pb.Message) {
 	}
 }
 
+// CW: Hardcoded non-robust way of getting the current number of replicas in my group.
+func (r *raft) getNumReplicas() uint {
+	return uint(len(r.config.Voters[0]))
+}
+
+// CW: Hardcoded non-robust way of getting the max PeerID among replicas in my group.
+func (r *raft) getMaxPeerID() pb.PeerID {
+	maxPeerID := pb.PeerID(0)
+	for peerID := range r.config.Voters[0] {
+		if peerID > maxPeerID {
+			maxPeerID = peerID
+		}
+	}
+	return maxPeerID
+}
+
+// CW: Decide whether to do RS coding for an AppendEntries attempt.
+func (r *raft) useRSCodingFor(payloadsSize uint64) bool {
+	return r.groupRangeID >= r.crosswordMinRangeID &&
+		payloadsSize >= r.crosswordMinPayload &&
+		(r.crosswordNumVoters == 0 ||
+			(r.crosswordNumVoters == r.getNumReplicas() &&
+				r.crosswordNumVoters == uint(r.getMaxPeerID()))) // PeerID starts from 1
+}
+
+// CW: Get RS coding sharding dimensions by checking current voters config.
+func (r *raft) getRSCodingDims() (numDataShards, numParityShards int) {
+	n := r.getNumReplicas()
+	numDataShards = int(n/2 + 1)
+	numParityShards = int(n) - numDataShards
+	return
+}
+
 // maybeSendAppend sends an append RPC with log entries (if any) that are not
 // yet known to be replicated in the given peer's log, as well as the current
 // commit index. Usually it sends a MsgApp message, but in some cases (e.g. the
@@ -750,26 +800,37 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 	payloadsSize := uint64(payloadsSize(entries))
 
 	// Send the MsgApp, and update the progress accordingly.
-	if r.enableCrossword && len(entries) > 0 && payloadsSize > 4096 {
-		// CW: FIXME: correct Crossword logic
+	if r.enableCrossword && len(entries) > 0 && r.useRSCodingFor(payloadsSize) {
+		// CW: sending fewer than majority shards to this follower
 		var timeStart time.Time
 		if r.rsCodingTiming {
 			timeStart = time.Now()
 		}
 
-		numDataShards, numParityShards := int(3), int(2)
+		numDataShards, numParityShards := r.getRSCodingDims()
 		coder := r.getCoder(numDataShards, numParityShards)
-		codeword := newCodeword[raftEntries](numDataShards, numParityShards)
-		if err = codeword.fromData((*raftEntries)(&entries), coder); err != nil {
+		codeword, err := codewordFromData((*raftEntries)(&entries), coder)
+		if err != nil {
 			r.logger.Errorf("%x [RS] failed to create codeword from entries: %v", r.id, err)
 			return false
 		}
-		if err = codeword.computeParity(coder); err != nil {
-			r.logger.Errorf("%x [RS] failed to compute parity for codeword: %v", r.id, err)
+
+		shardIdx := (int(to) + int(prevIndex)) % codeword.numShards()
+		if shardIdx < numDataShards {
+			// sending a data shard to this follower
+			// codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+		} else {
+			// sending a parity shard to this follower
+			if err = codeword.computeParity(coder); err != nil {
+				r.logger.Errorf("%x [RS] failed to compute parity for codeword: %v", r.id, err)
+				return false
+			}
+			// codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+		}
+		if err != nil {
+			r.logger.Errorf("%x [RS] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
 			return false
 		}
-		codeword.shards[1] = nil
-		codeword.shards[3] = nil
 
 		entriesNoData := make([]pb.Entry, len(entries))
 		for i := range entries {
@@ -792,7 +853,7 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 			Entries:         entriesNoData,
 			Commit:          commit,
 			Match:           pr.Match,
-			EntriesCodeword: codeword.intoProto(),
+			EntriesCodeword: codeword.convertIntoProto(),
 		})
 	} else {
 		// vanilla Raft
@@ -1696,6 +1757,13 @@ func stepLeader(r *raft, m pb.Message) error {
 		pr.RecentActive = true
 		pr.MaybeUpdateMatchCommit(m.Commit)
 		if m.Reject {
+			// CW: NOTE: currently is not handling rejected coded appends nicely;
+			//           this almost never happens in controlled evaluations.
+			if m.EntriesCodeword != nil {
+				err := fmt.Errorf("%x [RS] recved rejection to coded append from %x", r.id, m.From)
+				r.logger.Error(err)
+				return err
+			}
 			// RejectHint is the suggested next base entry for appending (i.e.
 			// we try to append entry RejectHint+1 next), and LogTerm is the
 			// term that the follower has at index RejectHint. Older versions
@@ -1716,8 +1784,13 @@ func stepLeader(r *raft, m pb.Message) error {
 			// which can easily result in hours of time spent probing and can
 			// even cause outright outages. The probes are thus optimized as
 			// described below.
-			r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
-				r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+			if r.rsCodingTiming {
+				r.logger.Infof("%x [RS] recv reject, hint: (index %d, term %d)) from %x index %d",
+					r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+			} else {
+				r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
+					r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+			}
 			nextProbeIdx := m.RejectHint
 			if m.LogTerm > 0 {
 				// If the follower has an uncommitted log tail, we would end up
@@ -1832,7 +1905,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			// equals pr.Match we know we don't m.Index+1 in our log, so moving
 			// back to replicating state is not useful; besides pr.PendingSnapshot
 			// would prevent it.
-			if pr.MaybeUpdate(m.Index) || (pr.Match == m.Index && pr.State == tracker.StateProbe) {
+			if pr.MaybeUpdate(m.Index, m.EntriesCodeword) || (pr.Match == m.Index && pr.State == tracker.StateProbe) {
 				switch {
 				case pr.State == tracker.StateProbe:
 					pr.BecomeReplicate()
@@ -2110,9 +2183,21 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
+	// CW: let responses carry a dummy EntriessCodeword that records the dimensions
+	//     and the shards sent in MsgApp but not the actual data.
+	var respEntriesCodeword *pb.EntriesCodeword
+	if r.enableCrossword && m.EntriesCodeword != nil {
+		respEntriesCodeword = &pb.EntriesCodeword{
+			NumDataShards:   m.EntriesCodeword.NumDataShards,
+			NumParityShards: m.EntriesCodeword.NumParityShards,
+			ShardsMap:       m.EntriesCodeword.ShardsMap,
+			DataSize:        m.EntriesCodeword.DataSize,
+		}
+	}
+
 	if a.prev.index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed,
-			Commit: r.raftLog.committed})
+			Commit: r.raftLog.committed, EntriesCodeword: respEntriesCodeword})
 		return
 	}
 
@@ -2125,25 +2210,31 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 
 		numDataShards, numParityShards := int(m.EntriesCodeword.NumDataShards), int(m.EntriesCodeword.NumParityShards)
 		coder := r.getCoder(numDataShards, numParityShards)
-		codeword := newCodeword[raftEntries](numDataShards, numParityShards)
-		if err := codeword.fromProto(m.EntriesCodeword); err != nil {
+		codeword, err := codewordFromProto[raftEntries](m.EntriesCodeword)
+		if err != nil {
 			r.logger.Errorf("%x [RS] failed to read codeword from protobuf: %v", r.id, err)
 			return
 		}
 
-		if codeword.availDataShards() < numDataShards {
+		if codeword.availShards() < numDataShards {
+			// CW: NOTE: simulating scheduled gossiping of shards for controlled evaluation...
+			for i := range a.entries {
+				a.entries[i].Data = raftlog.EncodeCommandBytes(
+					raftlog.EntryEncodingStandardWithoutAC, raftlog.MakeCmdIDKey(), nil, 0 /* pri */)
+			}
+		} else if codeword.availDataShards() < numDataShards {
+			// CW: held shards are enough but not all data shards present; need reconstruction
 			if err := codeword.reconstructData(coder); err != nil {
 				r.logger.Errorf("%x [RS] failed to reconstruct data shards: %v", r.id, err)
 				return
 			}
+			if entriesWithData, err := codeword.convertIntoData(coder); err != nil {
+				r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
+				return
+			} else {
+				a.entries = *entriesWithData
+			}
 		}
-
-		entriesReal, err := codeword.intoData(coder)
-		if err != nil {
-			r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
-			return
-		}
-		a.entries = *entriesReal
 
 		if r.rsCodingTiming {
 			r.logger.Infof("%x [RS] time elapsed @ %d recv: %v", r.id, codeword.dataSize, time.Since(timeStart))
@@ -2158,7 +2249,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		lastIndex := a.lastIndex()
 		r.raftLog.commitTo(LogMark{Term: m.Term, Index: min(m.Commit, lastIndex)})
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: lastIndex,
-			Commit: r.raftLog.committed})
+			Commit: r.raftLog.committed, EntriesCodeword: respEntriesCodeword})
 		return
 	}
 	r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
@@ -2188,10 +2279,11 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		Index: m.Index,
 		// This helps the leader track the follower's commit index. This flow is
 		// independent from accepted/rejected log appends.
-		Commit:     r.raftLog.committed,
-		Reject:     true,
-		RejectHint: hintIndex,
-		LogTerm:    hintTerm,
+		Commit:          r.raftLog.committed,
+		Reject:          true,
+		RejectHint:      hintIndex,
+		LogTerm:         hintTerm,
+		EntriesCodeword: respEntriesCodeword,
 	})
 }
 
@@ -2401,6 +2493,11 @@ func (r *raft) restore(s snapshot) bool {
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
 func (r *raft) promotable() bool {
+	// CW: NOTE: mark replicas with PeerID > 1 as non-promotable to force leader 1 when
+	//           enabling Crossword.
+	if r.enableCrossword && r.id > 1 {
+		return false
+	}
 	pr := r.trk.Progress(r.id)
 	return pr != nil && !pr.IsLearner && !r.raftLog.hasNextOrInProgressSnapshot()
 }

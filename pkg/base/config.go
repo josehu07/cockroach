@@ -327,6 +327,18 @@ var (
 	// CW: whether to enable Crossword protocol.
 	defaultRaftEnableCrossword = envutil.EnvOrDefaultBool(
 		"COCKROACH_RAFT_ENABLE_CROSSWORD", false) // CW: added
+
+	// CW: minimum range ID to enable Crossword on (to avoid system db ranges).
+	defaultRaftCrosswordMinRangeID = envutil.EnvOrDefaultInt64(
+		"COCKROACH_RAFT_CW_MIN_RANGE_ID", 70)
+
+	// CW: size threshold for using 1-shard config when enabling Crossword.
+	defaultRaftCrosswordMinPayload = envutil.EnvOrDefaultInt64(
+		"COCKROACH_RAFT_CW_MIN_PAYLOAD", 4096)
+
+	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
+	defaultRaftCrosswordNumVoters = envutil.EnvOrDefaultInt(
+		"COCKROACH_RAFT_CW_NUM_VOTERS", 5)
 )
 
 // Config is embedded by server.Config. A base config is not meant to be used
@@ -646,6 +658,15 @@ type RaftConfig struct {
 
 	// CW: whether to enable Crossword protocol.
 	RaftEnableCrossword bool
+
+	// CW: minimum range ID to enable Crossword on (to avoid system db ranges).
+	RaftCrosswordMinRangeID int64
+
+	// CW: size threshold for using 1-shard config when enabling Crossword.
+	RaftCrosswordMinPayload uint64
+
+	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
+	RaftCrosswordNumVoters uint
 }
 
 // SetDefaults initializes unset fields.
@@ -730,6 +751,9 @@ func (cfg *RaftConfig) SetDefaults() {
 	cfg.RaftMsgSizeProfiling = defaultRaftMsgSizeProfiling
 	cfg.RaftRSCodingTiming = defaultRaftRSCodingTiming
 	cfg.RaftEnableCrossword = defaultRaftEnableCrossword
+	cfg.RaftCrosswordMinRangeID = defaultRaftCrosswordMinRangeID
+	cfg.RaftCrosswordMinPayload = uint64(defaultRaftCrosswordMinPayload)
+	cfg.RaftCrosswordNumVoters = uint(defaultRaftCrosswordNumVoters)
 }
 
 // RaftElectionTimeout returns the raft election timeout, as computed from the

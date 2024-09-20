@@ -306,12 +306,18 @@ func (r *Replica) initRaftMuLockedReplicaMuLocked(s kvstorage.LoadedReplicaState
 // initRaftGroupRaftMuLockedReplicaMuLocked initializes a Raft group for the
 // replica, replacing the existing Raft group if any.
 func (r *Replica) initRaftGroupRaftMuLockedReplicaMuLocked() error {
+	// CW: NOTE: force PeerID to use the physical node's NodeID for controlled evaluation.
+	replicaId := raftpb.PeerID(r.replicaID)
+	if r.store.cfg.RaftEnableCrossword {
+		replicaId = raftpb.PeerID(r.store.NodeID())
+	}
+
 	ctx := r.AnnotateCtx(context.Background())
 	rg, err := raft.NewRawNode(newRaftConfig(
 		ctx,
 		(*replicaRaftStorage)(r),
 		r.RangeID,
-		raftpb.PeerID(r.replicaID),
+		replicaId,
 		r.mu.state.RaftAppliedIndex,
 		r.store.cfg,
 		&raftLogger{ctx: ctx},

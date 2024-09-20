@@ -385,7 +385,6 @@ func testStoreConfig(clock *hlc.Clock, version roachpb.Version) StoreConfig {
 	return sc
 }
 
-// CW: added rangeId
 func newRaftConfig(
 	ctx context.Context,
 	strg raft.Storage,
@@ -423,10 +422,13 @@ func newRaftConfig(
 		CRDBVersion: storeCfg.Settings.Version,
 
 		// CW: added
-		MsgSizeProfiling: storeCfg.RaftMsgSizeProfiling,
-		RSCodingTiming:   storeCfg.RaftRSCodingTiming,
-		EnableCrossword:  storeCfg.RaftEnableCrossword,
-		RaftGroupRangeID: int64(rangeID),
+		MsgSizeProfiling:    storeCfg.RaftMsgSizeProfiling,
+		RSCodingTiming:      storeCfg.RaftRSCodingTiming,
+		EnableCrossword:     storeCfg.RaftEnableCrossword,
+		CrosswordMinRangeID: storeCfg.RaftCrosswordMinRangeID,
+		CrosswordMinPayload: storeCfg.RaftCrosswordMinPayload,
+		CrosswordNumVoters:  storeCfg.RaftCrosswordNumVoters,
+		RaftGroupRangeID:    int64(rangeID),
 	}
 }
 

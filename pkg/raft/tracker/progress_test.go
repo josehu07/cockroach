@@ -80,7 +80,7 @@ func TestProgressResume(t *testing.T) {
 	p.MaybeDecrTo(1, 1)
 	assert.False(t, p.MsgAppProbesPaused)
 	p.MsgAppProbesPaused = true
-	p.MaybeUpdate(2)
+	p.MaybeUpdate(2, nil)
 	assert.True(t, p.MsgAppProbesPaused)
 }
 
@@ -148,7 +148,7 @@ func TestProgressUpdate(t *testing.T) {
 			Match: prevM,
 			Next:  prevN,
 		}
-		assert.Equal(t, tt.wok, p.MaybeUpdate(tt.update), i)
+		assert.Equal(t, tt.wok, p.MaybeUpdate(tt.update, nil), i)
 		assert.Equal(t, tt.wm, p.Match, i)
 		assert.Equal(t, tt.wn, p.Next, i)
 	}

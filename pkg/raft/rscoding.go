@@ -128,52 +128,29 @@ type rsCodeword[T any, P marshallablePtr[T]] struct {
 	dataSize        uint64
 }
 
-// Create a new empty RS codeword.
-func newCodeword[T any, P marshallablePtr[T]](numDataShards, numParityShards int) *rsCodeword[T, P] {
+func (cw *rsCodeword[T, P]) String() string {
+	return fmt.Sprintf("RS(%d,%d)/%d/", cw.numDataShards, cw.numParityShards, cw.dataSize)
+}
+
+// Create an empty RS codeword.
+func codewordFromNull[T any, P marshallablePtr[T]](coder rsCoder) *rsCodeword[T, P] {
 	return &rsCodeword[T, P]{
-		numDataShards:   numDataShards,
-		numParityShards: numParityShards,
-		shards:          make([][]byte, numDataShards+numParityShards),
+		numDataShards:   coder.DataShards(),
+		numParityShards: coder.ParityShards(),
+		shards:          make([][]byte, coder.TotalShards()),
 		shardSize:       0,
 		dataSize:        0,
 	}
 }
 
-func shardPresent(shard []byte) bool {
-	return len(shard) > 0 // non-nil and non-empty
-}
-
-func (cw *rsCodeword[T, P]) String() string {
-	return fmt.Sprintf("RS(%d,%d)/%d/", cw.numDataShards, cw.numParityShards, cw.dataSize)
-}
-
-// Assert shard dimensions match with given coder.
-func (cw *rsCodeword[T, P]) dimsMatch(coder rsCoder) error {
-	if cw.numDataShards != coder.DataShards() || cw.numParityShards != coder.ParityShards() {
-		return fmt.Errorf("(data, parity) pair mismatch: (%d, %d) != (%d, %d)",
-			cw.numDataShards, cw.numParityShards, coder.DataShards(), coder.ParityShards())
-	} else {
-		return nil
-	}
-}
-
-// Calculate (and set) size per shard, size of padded data, and size of parity data using actual size.
-func (cw *rsCodeword[T, P]) usefulSizes() (paddedSize, paritySize uint64) {
-	paddedSize = cw.dataSize
-	residue := cw.dataSize % uint64(cw.numDataShards)
-	if residue != 0 {
-		paddedSize += uint64(cw.numDataShards) - residue
-	}
-	cw.shardSize = paddedSize / uint64(cw.numDataShards)
-	paritySize = uint64(cw.numParityShards) * cw.shardSize
-	return
-}
-
-// Encode input marshallablePtr data into shards. The second output is the size of actual bytes of
-// marshalled input, without zero padding.
-func (cw *rsCodeword[T, P]) fromData(input P, coder rsCoder) error {
-	if err := cw.dimsMatch(coder); err != nil {
-		return err
+// Create an RS codeword by marshalling input marshallablePtr data and splitting into shards.
+func codewordFromData[T any, P marshallablePtr[T]](input P, coder rsCoder) (*rsCodeword[T, P], error) {
+	cw := &rsCodeword[T, P]{
+		numDataShards:   coder.DataShards(),
+		numParityShards: coder.ParityShards(),
+		shards:          nil,
+		shardSize:       0,
+		dataSize:        0,
 	}
 
 	dataSize, inputSizes := input.rsSize()
@@ -182,20 +159,20 @@ func (cw *rsCodeword[T, P]) fromData(input P, coder rsCoder) error {
 
 	buf := make([]byte, paddedSize, paddedSize+paritySize)
 	if err := input.rsMarshalTo(buf, inputSizes); err != nil {
-		return err
+		return nil, err
 	}
 
 	if shards, err := coder.Split(buf); err != nil {
-		return err
+		return nil, err
 	} else {
 		cw.shards = shards
-		return nil
+		return cw, nil
 	}
 }
 
 // Decode from shards and actual bytes size into output object, requiring that all data shards
 // must already be available.
-func (cw *rsCodeword[T, P]) intoData(coder rsCoder) (P, error) {
+func (cw *rsCodeword[T, P]) convertIntoData(coder rsCoder) (P, error) {
 	if err := cw.dimsMatch(coder); err != nil {
 		return nil, err
 	}
@@ -221,32 +198,75 @@ func (cw *rsCodeword[T, P]) intoData(coder rsCoder) (P, error) {
 }
 
 // Populate fields and shards from a protobuf EntriesCodeword.
-func (cw *rsCodeword[T, P]) fromProto(cwProto *pb.EntriesCodeword) error {
+func codewordFromProto[T any, P marshallablePtr[T]](cwProto *pb.EntriesCodeword) (*rsCodeword[T, P], error) {
 	if cwProto.NumDataShards == 0 {
-		return fmt.Errorf("proto numDataShards is 0")
+		return nil, fmt.Errorf("proto numDataShards is 0")
 	}
 	if cwProto.NumDataShards+cwProto.NumParityShards != int32(len(cwProto.Shards)) {
-		return fmt.Errorf("(data, parity) pair (%d, %d) mismatch with len(shards) %d",
+		return nil, fmt.Errorf("(data, parity) pair (%d, %d) mismatch with len(shards) %d",
 			cwProto.NumDataShards, cwProto.NumParityShards, len(cwProto.Shards))
 	}
+	if len(cwProto.ShardsMap) != len(cwProto.Shards) {
+		return nil, fmt.Errorf("len(shardsMap) %d != len(shards) %d",
+			len(cwProto.ShardsMap), len(cwProto.Shards))
+	}
+	for i, shard := range cwProto.Shards {
+		if cwProto.ShardsMap[i] != shardPresent(shard) {
+			return nil, fmt.Errorf("shardsMap[%d] %t != shardPresent(shards[%d]) %t",
+				i, cwProto.ShardsMap[i], i, shardPresent(shard))
+		}
+	}
 
-	cw.numDataShards = int(cwProto.NumDataShards)
-	cw.numParityShards = int(cwProto.NumParityShards)
-	cw.shards = cwProto.Shards
-	cw.shardSize = uint64(len(cwProto.Shards[0]))
-	cw.dataSize = cwProto.DataSize
-	return nil
+	return &rsCodeword[T, P]{
+		numDataShards:   int(cwProto.NumDataShards),
+		numParityShards: int(cwProto.NumParityShards),
+		shards:          cwProto.Shards,
+		shardSize:       uint64(len(cwProto.Shards[0])),
+		dataSize:        cwProto.DataSize,
+	}, nil
 }
 
 // Make a protobuf EntriesCodeword for transport out of cw; shards keep reference to the same
 // slices of bytes.
-func (cw *rsCodeword[T, P]) intoProto() *pb.EntriesCodeword {
+func (cw *rsCodeword[T, P]) convertIntoProto() *pb.EntriesCodeword {
+	shardsMap := make([]bool, len(cw.shards))
+	for i, shard := range cw.shards {
+		shardsMap[i] = shardPresent(shard)
+	}
 	return &pb.EntriesCodeword{
 		NumDataShards:   int32(cw.numDataShards),
 		NumParityShards: int32(cw.numParityShards),
+		ShardsMap:       shardsMap,
 		Shards:          cw.shards,
 		DataSize:        cw.dataSize,
 	}
+}
+
+// Shard is non-nil and non-empty.
+func shardPresent(shard []byte) bool {
+	return len(shard) > 0
+}
+
+// Assert shard dimensions match with given coder.
+func (cw *rsCodeword[T, P]) dimsMatch(coder rsCoder) error {
+	if cw.numDataShards != coder.DataShards() || cw.numParityShards != coder.ParityShards() {
+		return fmt.Errorf("(data, parity) pair mismatch: (%d, %d) != (%d, %d)",
+			cw.numDataShards, cw.numParityShards, coder.DataShards(), coder.ParityShards())
+	} else {
+		return nil
+	}
+}
+
+// Calculate (and set) size per shard, size of padded data, and size of parity data using actual size.
+func (cw *rsCodeword[T, P]) usefulSizes() (paddedSize, paritySize uint64) {
+	paddedSize = cw.dataSize
+	residue := cw.dataSize % uint64(cw.numDataShards)
+	if residue != 0 {
+		paddedSize += uint64(cw.numDataShards) - residue
+	}
+	cw.shardSize = paddedSize / uint64(cw.numDataShards)
+	paritySize = uint64(cw.numParityShards) * cw.shardSize
+	return
 }
 
 // Total number of shards.
@@ -401,6 +421,24 @@ func (cw *rsCodeword[T, P]) verifyParity(coder rsCoder) error {
 	} else {
 		return nil
 	}
+}
+
+// Creates a new rsCodeword that contains reference to a single shard at index (without copying).
+func (cw *rsCodeword[T, P]) singleRef(shardIdx int) (*rsCodeword[T, P], error) {
+	if shardIdx < 0 || shardIdx >= cw.numShards() {
+		return nil, fmt.Errorf("shardIdx %d out of range [0, %d)", shardIdx, cw.numShards())
+	}
+
+	shards := make([][]byte, cw.numShards())
+	shards[shardIdx] = cw.shards[shardIdx]
+
+	return &rsCodeword[T, P]{
+		numDataShards:   cw.numDataShards,
+		numParityShards: cw.numParityShards,
+		shards:          shards,
+		shardSize:       cw.shardSize,
+		dataSize:        cw.dataSize,
+	}, nil
 }
 
 // Creates a new rsCodeword that contains references to a subset of the shards (without copying).
