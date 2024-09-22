@@ -388,6 +388,7 @@ func testStoreConfig(clock *hlc.Clock, version roachpb.Version) StoreConfig {
 func newRaftConfig(
 	ctx context.Context,
 	strg raft.Storage,
+	nodeID roachpb.NodeID,
 	rangeID roachpb.RangeID,
 	replicaID raftpb.PeerID,
 	appliedIndex kvpb.RaftIndex,
@@ -428,7 +429,8 @@ func newRaftConfig(
 		CrosswordMinRangeID: storeCfg.RaftCrosswordMinRangeID,
 		CrosswordMinPayload: storeCfg.RaftCrosswordMinPayload,
 		CrosswordNumVoters:  storeCfg.RaftCrosswordNumVoters,
-		RaftGroupRangeID:    int64(rangeID),
+		RoachNodeID:         int32(nodeID),
+		GroupRangeID:        int64(rangeID),
 	}
 }
 

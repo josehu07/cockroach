@@ -318,15 +318,15 @@ var (
 
 	// CW: whether to turn on AppendEntries size profiling.
 	defaultRaftMsgSizeProfiling = envutil.EnvOrDefaultBool(
-		"COCKROACH_RAFT_MSG_SIZE_PROFILING", false) // CW: added
+		"COCKROACH_RAFT_MSG_SIZE_PROFILING", false)
 
 	// CW: whether to turn on RS coding timing logging.
 	defaultRaftRSCodingTiming = envutil.EnvOrDefaultBool(
-		"COCKROACH_RAFT_RSCODING_TIMING", false) // CW: added
+		"COCKROACH_RAFT_RSCODING_TIMING", false)
 
 	// CW: whether to enable Crossword protocol.
 	defaultRaftEnableCrossword = envutil.EnvOrDefaultBool(
-		"COCKROACH_RAFT_ENABLE_CROSSWORD", false) // CW: added
+		"COCKROACH_RAFT_ENABLE_CROSSWORD", false)
 
 	// CW: minimum range ID to enable Crossword on (to avoid system db ranges).
 	defaultRaftCrosswordMinRangeID = envutil.EnvOrDefaultInt64(
@@ -336,7 +336,7 @@ var (
 	defaultRaftCrosswordMinPayload = envutil.EnvOrDefaultInt64(
 		"COCKROACH_RAFT_CW_MIN_PAYLOAD", 4096)
 
-	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
+	// CW: fixed voters cardinality for which to enable Crossword on.
 	defaultRaftCrosswordNumVoters = envutil.EnvOrDefaultInt(
 		"COCKROACH_RAFT_CW_NUM_VOTERS", 5)
 )
@@ -665,7 +665,7 @@ type RaftConfig struct {
 	// CW: size threshold for using 1-shard config when enabling Crossword.
 	RaftCrosswordMinPayload uint64
 
-	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
+	// CW: fixed voters cardinality for which to enable Crossword on.
 	RaftCrosswordNumVoters uint
 }
 

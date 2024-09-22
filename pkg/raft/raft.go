@@ -295,8 +295,11 @@ type Config struct {
 	// CW: fixed voters cardinality for which to enable Crossword on (0 for any).
 	CrosswordNumVoters uint
 
+	// CW: remember the physical node ID of me.
+	RoachNodeID int32
+
 	// CW: remember the range ID of my Raft group.
-	RaftGroupRangeID int64
+	GroupRangeID int64
 }
 
 func (c *Config) validate() error {
@@ -462,6 +465,7 @@ type raft struct {
 
 	// CW: added
 	profileChan         chan msgSizeProfile
+	roachNodeID         int32
 	groupRangeID        int64
 	enableCrossword     bool
 	rsCodingTiming      bool
@@ -510,7 +514,8 @@ func newRaft(c *Config) *raft {
 		crdbVersion:                 c.CRDBVersion,
 		// CW: added
 		profileChan:         profileChan,
-		groupRangeID:        c.RaftGroupRangeID,
+		roachNodeID:         c.RoachNodeID,
+		groupRangeID:        c.GroupRangeID,
 		enableCrossword:     c.EnableCrossword,
 		rsCodingTiming:      c.RSCodingTiming,
 		crosswordMinRangeID: c.CrosswordMinRangeID,
@@ -549,13 +554,13 @@ func newRaft(c *Config) *raft {
 
 	// CW: message size logger goroutine
 	if c.MsgSizeProfiling {
-		r.logger.Infof("%x [RS] message size profiling turned on", r.id)
+		r.logger.Infof("%x [CW] message size profiling turned on", r.id)
 		go r.msgSizeProfileLogger(profileChan)
 	}
 
 	if c.EnableCrossword {
-		r.logger.Infof("%x [RS] Crossword on: minRangeID %d minPayload %d numVoters %d",
-			r.id, r.crosswordMinRangeID, r.crosswordMinPayload, r.crosswordNumVoters)
+		r.logger.Infof("%x [CW] Crossword on: nodeID %d rangeID %d minRangeID %d minPayload %d fixedVoters %d",
+			r.id, r.roachNodeID, r.groupRangeID, r.crosswordMinRangeID, r.crosswordMinPayload, r.crosswordNumVoters)
 		r.rsCodingTiming = c.RSCodingTiming
 	}
 
@@ -731,24 +736,11 @@ func (r *raft) getNumReplicas() uint {
 	return uint(len(r.config.Voters[0]))
 }
 
-// CW: Hardcoded non-robust way of getting the max PeerID among replicas in my group.
-func (r *raft) getMaxPeerID() pb.PeerID {
-	maxPeerID := pb.PeerID(0)
-	for peerID := range r.config.Voters[0] {
-		if peerID > maxPeerID {
-			maxPeerID = peerID
-		}
-	}
-	return maxPeerID
-}
-
 // CW: Decide whether to do RS coding for an AppendEntries attempt.
 func (r *raft) useRSCodingFor(payloadsSize uint64) bool {
 	return r.groupRangeID >= r.crosswordMinRangeID &&
 		payloadsSize >= r.crosswordMinPayload &&
-		(r.crosswordNumVoters == 0 ||
-			(r.crosswordNumVoters == r.getNumReplicas() &&
-				r.crosswordNumVoters == uint(r.getMaxPeerID()))) // PeerID starts from 1
+		r.crosswordNumVoters == r.getNumReplicas()
 }
 
 // CW: Get RS coding sharding dimensions by checking current voters config.
@@ -757,6 +749,17 @@ func (r *raft) getRSCodingDims() (numDataShards, numParityShards int) {
 	numDataShards = int(n/2 + 1)
 	numParityShards = int(n) - numDataShards
 	return
+}
+
+// CW: Choose shard index to send to given peer.
+func (r *raft) shardIdxForPeer(to pb.PeerID) int {
+	pos := 0
+	for peer := range r.config.Voters[0] {
+		if peer < to {
+			pos++
+		}
+	}
+	return pos
 }
 
 // maybeSendAppend sends an append RPC with log entries (if any) that are not
@@ -811,24 +814,24 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		coder := r.getCoder(numDataShards, numParityShards)
 		codeword, err := codewordFromData((*raftEntries)(&entries), coder)
 		if err != nil {
-			r.logger.Errorf("%x [RS] failed to create codeword from entries: %v", r.id, err)
+			r.logger.Errorf("%x [CW] failed to create codeword from entries: %v", r.id, err)
 			return false
 		}
 
-		shardIdx := (int(to) + int(prevIndex)) % codeword.numShards()
+		shardIdx := r.shardIdxForPeer(to)
 		if shardIdx < numDataShards {
 			// sending a data shard to this follower
-			// codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+			codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
 		} else {
 			// sending a parity shard to this follower
 			if err = codeword.computeParity(coder); err != nil {
-				r.logger.Errorf("%x [RS] failed to compute parity for codeword: %v", r.id, err)
+				r.logger.Errorf("%x [CW] failed to compute parity for codeword: %v", r.id, err)
 				return false
 			}
-			// codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+			codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
 		}
 		if err != nil {
-			r.logger.Errorf("%x [RS] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
+			r.logger.Errorf("%x [CW] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
 			return false
 		}
 
@@ -842,7 +845,7 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		}
 
 		if r.rsCodingTiming {
-			r.logger.Infof("%x [RS] time elapsed @ %d send: %v", r.id, codeword.dataSize, time.Since(timeStart))
+			r.logger.Infof("%x [CW] time elapsed @ %d send: %v", r.id, codeword.dataSize, time.Since(timeStart))
 		}
 
 		r.send(pb.Message{
@@ -1760,7 +1763,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			// CW: NOTE: currently is not handling rejected coded appends nicely;
 			//           this almost never happens in controlled evaluations.
 			if m.EntriesCodeword != nil {
-				err := fmt.Errorf("%x [RS] recved rejection to coded append from %x", r.id, m.From)
+				err := fmt.Errorf("%x [CW] recved rejection to coded append from %x", r.id, m.From)
 				r.logger.Error(err)
 				return err
 			}
@@ -1785,7 +1788,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			// even cause outright outages. The probes are thus optimized as
 			// described below.
 			if r.rsCodingTiming {
-				r.logger.Infof("%x [RS] recv reject, hint: (index %d, term %d)) from %x index %d",
+				r.logger.Infof("%x [CW] recv reject, hint: (index %d, term %d)) from %x index %d",
 					r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
 			} else {
 				r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
@@ -2212,7 +2215,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		coder := r.getCoder(numDataShards, numParityShards)
 		codeword, err := codewordFromProto[raftEntries](m.EntriesCodeword)
 		if err != nil {
-			r.logger.Errorf("%x [RS] failed to read codeword from protobuf: %v", r.id, err)
+			r.logger.Errorf("%x [CW] failed to read codeword from protobuf: %v", r.id, err)
 			return
 		}
 
@@ -2225,11 +2228,11 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		} else if codeword.availDataShards() < numDataShards {
 			// CW: held shards are enough but not all data shards present; need reconstruction
 			if err := codeword.reconstructData(coder); err != nil {
-				r.logger.Errorf("%x [RS] failed to reconstruct data shards: %v", r.id, err)
+				r.logger.Errorf("%x [CW] failed to reconstruct data shards: %v", r.id, err)
 				return
 			}
 			if entriesWithData, err := codeword.convertIntoData(coder); err != nil {
-				r.logger.Errorf("%x [RS] failed to construct entries from codeword: %v", r.id, err)
+				r.logger.Errorf("%x [CW] failed to construct entries from codeword: %v", r.id, err)
 				return
 			} else {
 				a.entries = *entriesWithData
@@ -2237,7 +2240,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		}
 
 		if r.rsCodingTiming {
-			r.logger.Infof("%x [RS] time elapsed @ %d recv: %v", r.id, codeword.dataSize, time.Since(timeStart))
+			r.logger.Infof("%x [CW] time elapsed @ %d recv: %v", r.id, codeword.dataSize, time.Since(timeStart))
 		}
 	}
 
@@ -2493,9 +2496,11 @@ func (r *raft) restore(s snapshot) bool {
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
 func (r *raft) promotable() bool {
-	// CW: NOTE: mark replicas with PeerID > 1 as non-promotable to force leader 1 when
-	//           enabling Crossword.
-	if r.enableCrossword && r.id > 1 {
+	// CW: NOTE: mark replicas with physical NodeID > 1 as non-promotable to force leader 1
+	//           when running controlled evaluation.
+	//           This only works when COCKROACH_DISABLE_LEADER_FOLLOWS_LEASEHOLDER is set true.
+	if r.crosswordNumVoters == r.getNumReplicas() && r.roachNodeID > 1 {
+		// r.logger.Infof("%x [CW] promotion attempt prevented in Crossword eval", r.id)
 		return false
 	}
 	pr := r.trk.Progress(r.id)
