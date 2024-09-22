@@ -737,10 +737,16 @@ func (r *raft) getNumReplicas() uint {
 }
 
 // CW: Decide whether to do RS coding for an AppendEntries attempt.
-func (r *raft) useRSCodingFor(payloadsSize uint64) bool {
-	return r.groupRangeID >= r.crosswordMinRangeID &&
-		payloadsSize >= r.crosswordMinPayload &&
-		r.crosswordNumVoters == r.getNumReplicas()
+func (r *raft) useRSCodingFor(entries []pb.Entry, payloadsSize uint64) bool {
+	for _, e := range entries { // must all be Normal entry and StandardWithoutAC encoding
+		if e.Type != pb.EntryNormal || (len(e.Data) > 0 && e.Data[0] != byte(0)) {
+			return false
+		}
+	}
+	return len(entries) > 0 && // must have payload
+		r.groupRangeID >= r.crosswordMinRangeID && // skip system ranges
+		payloadsSize >= r.crosswordMinPayload && // decide with payload size threshold
+		r.crosswordNumVoters == r.getNumReplicas() // must have matching cluster size
 }
 
 // CW: Get RS coding sharding dimensions by checking current voters config.
@@ -798,23 +804,10 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 			return r.maybeSendSnapshot(to, pr)
 		}
 	}
-
-	// CW: modified
 	payloadsSize := uint64(payloadsSize(entries))
-	var entryTypes [][2]int32
-	for _, e := range entries {
-		et, ed := int32(e.Type), int32(0)
-		if len(e.Data) > 0 {
-			ed = int32(e.Data[0])
-		}
-		entryTypes = append(entryTypes, [2]int32{et, ed})
-	}
-	if len(entries) > 0 {
-		r.logger.Errorf("%x [CW] ??? %v", r.id, entryTypes)
-	}
 
 	// Send the MsgApp, and update the progress accordingly.
-	if r.enableCrossword && len(entries) > 0 && r.useRSCodingFor(payloadsSize) {
+	if r.enableCrossword && r.useRSCodingFor(entries, payloadsSize) {
 		// CW: sending fewer than majority shards to this follower
 		var timeStart time.Time
 		if r.rsCodingTiming {
@@ -832,14 +825,14 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 		shardIdx := r.shardIdxForPeer(to)
 		if shardIdx < numDataShards {
 			// sending a data shard to this follower
-			codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+			codeword, err = codeword.singleRef(shardIdx)
 		} else {
 			// sending a parity shard to this follower
 			if err = codeword.computeParity(coder); err != nil {
 				r.logger.Errorf("%x [CW] failed to compute parity for codeword: %v", r.id, err)
 				return false
 			}
-			codeword, err = codeword.singleRef(shardIdx) // TODO: uncomment
+			codeword, err = codeword.singleRef(shardIdx)
 		}
 		if err != nil {
 			r.logger.Errorf("%x [CW] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
