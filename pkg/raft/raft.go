@@ -801,6 +801,17 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 
 	// CW: modified
 	payloadsSize := uint64(payloadsSize(entries))
+	var entryTypes [][2]int32
+	for _, e := range entries {
+		et, ed := int32(e.Type), int32(0)
+		if len(e.Data) > 0 {
+			ed = int32(e.Data[0])
+		}
+		entryTypes = append(entryTypes, [2]int32{et, ed})
+	}
+	if len(entries) > 0 {
+		r.logger.Errorf("%x [CW] ??? %v", r.id, entryTypes)
+	}
 
 	// Send the MsgApp, and update the progress accordingly.
 	if r.enableCrossword && len(entries) > 0 && r.useRSCodingFor(payloadsSize) {
@@ -2225,11 +2236,14 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 				a.entries[i].Data = raftlog.EncodeCommandBytes(
 					raftlog.EntryEncodingStandardWithoutAC, raftlog.MakeCmdIDKey(), nil, 0 /* pri */)
 			}
-		} else if codeword.availDataShards() < numDataShards {
-			// CW: held shards are enough but not all data shards present; need reconstruction
-			if err := codeword.reconstructData(coder); err != nil {
-				r.logger.Errorf("%x [CW] failed to reconstruct data shards: %v", r.id, err)
-				return
+		} else {
+			// CW: held shards are enough
+			if codeword.availDataShards() < numDataShards {
+				// CW: not all data shards present; need to call reconstruction
+				if err := codeword.reconstructData(coder); err != nil {
+					r.logger.Errorf("%x [CW] failed to reconstruct data shards: %v", r.id, err)
+					return
+				}
 			}
 			if entriesWithData, err := codeword.convertIntoData(coder); err != nil {
 				r.logger.Errorf("%x [CW] failed to construct entries from codeword: %v", r.id, err)
