@@ -15,11 +15,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/errors"
 	"golang.org/x/sync/errgroup"
 )
 
-// CW: allowed text scaling
+// CW: CHAR field capacities scales in SQL tables
+var textScale = envutil.EnvOrDefaultInt("COCKROACH_TPCC_TEXT_SCALE", 256)
 
 var (
 	// WAREHOUSE table.

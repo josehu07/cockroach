@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
@@ -55,6 +56,10 @@ var LeaseRebalanceThreshold = settings.RegisterFloatSetting(
 		"it is considered for lease-transfers",
 	0.05,
 	settings.WithPublic)
+
+// CW: are we trying to force a stable leaseholder & leader node?
+var raftTryForceLeader = envutil.EnvOrDefaultBool(
+	"COCKROACH_RAFT_TRY_FORCE_LEADER", false)
 
 // LeaseRebalanceThresholdMin is the absolute number of leases above/below the
 // mean lease count that a store can have before considered overfull/underfull.
@@ -2937,6 +2942,11 @@ func (a Allocator) shouldTransferLeaseForLeaseCountConvergence(
 	// rebalancing is enabled? In happy cases it's nice to keep this working
 	// to even out the number of leases in addition to the number of replicas,
 	// but it's certainly a blunt instrument that could undo what we want.
+
+	// CW: turn lease-count-based transfer off for controlled evaluation...
+	if raftTryForceLeader {
+		return false
+	}
 
 	// Allow lease transfer if we're above the overfull threshold, which is
 	// mean*(1+LeaseRebalanceThreshold).

@@ -2503,13 +2503,6 @@ func (r *raft) restore(s snapshot) bool {
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
 func (r *raft) promotable() bool {
-	// CW: NOTE: mark replicas with physical NodeID > 1 as non-promotable to force leader 1
-	//           when running controlled evaluation.
-	//           This only works when COCKROACH_DISABLE_LEADER_FOLLOWS_LEASEHOLDER is set true.
-	if r.crosswordNumVoters == r.getNumReplicas() && r.roachNodeID > 1 {
-		// r.logger.Infof("%x [CW] promotion attempt prevented in Crossword eval", r.id)
-		return false
-	}
 	pr := r.trk.Progress(r.id)
 	return pr != nil && !pr.IsLearner && !r.raftLog.hasNextOrInProgressSnapshot()
 }

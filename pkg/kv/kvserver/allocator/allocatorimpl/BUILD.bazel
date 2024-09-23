@@ -27,6 +27,7 @@ go_library(
         "//pkg/settings",
         "//pkg/settings/cluster",
         "//pkg/util/admission/admissionpb",
+        "//pkg/util/envutil",
         "//pkg/util/log",
         "//pkg/util/metric",
         "//pkg/util/stop",
