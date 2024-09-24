@@ -561,7 +561,6 @@ func newRaft(c *Config) *raft {
 	if c.EnableCrossword {
 		r.logger.Infof("%x [CW] Crossword on: nodeID %d rangeID %d minRangeID %d minPayload %d fixedVoters %d",
 			r.id, r.roachNodeID, r.groupRangeID, r.crosswordMinRangeID, r.crosswordMinPayload, r.crosswordNumVoters)
-		r.rsCodingTiming = c.RSCodingTiming
 	}
 
 	// TODO(pav-kv): it should be ok to simply print %+v for lastID.
@@ -2208,7 +2207,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
-	// CW: entries data need to be used now, construct from codeward if necessary
+	// CW: entries data need to be used now, construct from codeword if necessary
 	if r.enableCrossword && m.EntriesCodeword != nil {
 		var timeStart time.Time
 		if r.rsCodingTiming {
@@ -2224,7 +2223,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		}
 
 		if codeword.availShards() < numDataShards {
-			// CW: NOTE: simulating scheduled gossiping of shards for controlled evaluation...
+			// CW: NOTE: used scheduled gossiping of shards for controlled evaluation...
 			for i := range a.entries {
 				a.entries[i].Data = raftlog.EncodeCommandBytes(
 					raftlog.EntryEncodingStandardWithoutAC, raftlog.MakeCmdIDKey(), nil, 0 /* pri */)
