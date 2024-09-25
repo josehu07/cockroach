@@ -821,21 +821,22 @@ func (r *raft) maybeSendAppend(to pb.PeerID) bool {
 			return false
 		}
 
+		// compute parity shards if needed
 		shardIdx := r.shardIdxForPeer(to)
-		if shardIdx < numDataShards {
-			// sending a data shard to this follower
-			codeword, err = codeword.singleRef(shardIdx)
-		} else {
-			// sending a parity shard to this follower
+		if r.crosswordMinPayload == 0 || shardIdx >= numDataShards {
 			if err = codeword.computeParity(coder); err != nil {
 				r.logger.Errorf("%x [CW] failed to compute parity for codeword: %v", r.id, err)
 				return false
 			}
-			codeword, err = codeword.singleRef(shardIdx)
 		}
-		if err != nil {
-			r.logger.Errorf("%x [CW] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
-			return false
+
+		// carry the proper shard to this follower
+		if r.crosswordMinPayload > 0 {
+			codeword, err = codeword.singleRef(shardIdx)
+			if err != nil {
+				r.logger.Errorf("%x [CW] failed to make singleRef codeword for %d: %v", r.id, shardIdx, err)
+				return false
+			}
 		}
 
 		entriesNoData := make([]pb.Entry, len(entries))
